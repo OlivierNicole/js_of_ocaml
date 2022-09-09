@@ -99,6 +99,25 @@ function caml_fatal_uncaught_exception(err){
   }
 }
 
+//Provides: caml_fatal_unhandled_effect
+//Requires: caml_named_value
+function caml_fatal_unhandled_effect(eff){
+  var handler = caml_named_value("Printexc.handle_uncaught_exception");
+  var at_exit = caml_named_value("Pervasives.do_at_exit");
+  if(at_exit) {
+    at_exit(
+      function(x) {
+        globalThis.console.error("Fatal error: unhandled effect\n");
+      },
+      function(e) {
+        globalThis.console.error("Fatal error: unhandled effect and exception raised by an at_exit function\n");
+      },
+      function(eff) {
+        globalThis.console.error("Fatal error: unhandled effect and effect performed by an at_exit function\n");
+      },
+      0)
+  }
+}
 
 //Provides: caml_set_static_env
 function caml_set_static_env(k,v){
