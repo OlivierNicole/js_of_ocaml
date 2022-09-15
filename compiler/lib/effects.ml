@@ -539,7 +539,7 @@ let toplevel_kf () =
   let ret = Var.fresh () in
   { params = [ x; x' ]
   ; handler = None
-  ; body = [ Let (ret, Prim (Extern "caml_unhandled_effect", [ Pv x ])) ]
+  ; body = [ Let (ret, Prim (Extern "caml_fatal_unhandled_effect", [ Pv x ])) ]
   ; branch = Return ret
   }
 
