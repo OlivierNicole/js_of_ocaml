@@ -69,7 +69,7 @@ let build_graph (blocks : block Addr.Map.t) (pc : Addr.t) : graph =
 let print_graph blocks (g : graph) =
   if not @@ debug ()
   then ()
-  else
+  else begin
     let is_handler_succ v v' =
       match (Addr.Map.find v blocks).handler with
       | None -> false
@@ -100,6 +100,7 @@ let print_graph blocks (g : graph) =
     (*   ) s *)
     (* ) g.preds; *)
     Printf.eprintf "}\n"
+  end
 
 let dominated_by_node (g : graph) : Addr.Set.t Addr.Map.t =
   let explore_avoiding v =
@@ -797,7 +798,7 @@ let nop_block block =
 let nop { start; blocks; free_pc } =
   let g = build_graph blocks start in
   let dom_by = dominated_by_node g in
-  print_graph blocks g;
+  if debug () then print_graph blocks g;
 
   (if not @@ debug () then () else Printf.eprintf "\nidom:\n");
 
@@ -814,7 +815,7 @@ let nop { start; blocks; free_pc } =
 
 let pr_graph ({ start; blocks; _ } as p) =
   let g = build_graph blocks start in
-  print_graph blocks g;
+  if debug () then print_graph blocks g;
   p
 
 let f ({ start; blocks; free_pc } : Code.program) : Code.program =
@@ -841,7 +842,7 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
               Printf.eprintf "\n")
             dom_by;
           Printf.eprintf "\n";
-          print_graph blocks cfg;
+          if debug () then print_graph blocks cfg;
           Printf.eprintf "%!"));
 
         let closure_jc = jump_closures cfg dom_by in
@@ -849,10 +850,8 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
         let closure_db = delimited_by blocks cfg closure_en in
         let closure_does = defs_of_exit_scope blocks cfg closure_en in
 
-        (if not @@ debug ()
-        then ()
-        else (
-          Printf.eprintf "\nidom:\n");
+        if debug () then begin
+          Printf.eprintf "\nidom:\n";
 
           let idom = immediate_dominator_of_node cfg dom_by in
           Addr.Map.iter (fun node dom -> Printf.eprintf "%d -> %d\n" node dom) idom;
@@ -920,7 +919,8 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
                 (fun k v -> Printf.eprintf "v%d -> v%d\n" (Var.idx k) (Var.idx v))
                 entry_defs;
               Printf.eprintf "\n")
-            closure_does);
+            closure_does;
+        end;
 
         ( merge_jump_closures closure_jc jc
         , merge_exit_nodes closure_en en
