@@ -328,8 +328,7 @@ let rec in_this_scope scope_defs v =
   let v = Var.idx v in
   match scope_defs.(v) with
   | Flow.Phi s -> Var.Set.exists (in_this_scope scope_defs) s
-  | Flow.Expr _ | Flow.FromOtherStack -> true
-  | Flow.Param -> assert false
+  | Flow.Expr _ | Flow.FromOtherStack | Flow.Param -> true
 
 let rec entry_def_of scope_defs entry_defs v =
   try Var.Map.find v entry_defs
