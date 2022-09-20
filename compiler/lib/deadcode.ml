@@ -110,20 +110,11 @@ and mark_reachable st pc =
         match cont with
         | Some c -> mark_cont_reachable st c
         | None -> ())
-    | Perform (v0, v1, cont) ->
-        mark_var st v0;
-        mark_var st v1;
-        mark_cont_reachable st cont
-    | Reperform (v0, v1) ->
-        mark_var st v0;
-        mark_var st v1
-    | LastApply (v0, (v1, vs, _), cont) -> (
-        mark_var st v0;
-        mark_var st v1;
-        List.iter ~f:(mark_var st) vs;
-        match cont with
-        | Some c -> mark_cont_reachable st c
-        | None -> ()))
+    (* Constructors [Perform], [Reperform], [LastApply] are not supposed to be
+       present when applying dead code elimination (they should be eliminated
+       by CPS transformation first). *)
+    | Perform _ | Reperform _ | LastApply _ ->
+        assert false)
 
 (****)
 
