@@ -96,6 +96,10 @@ let rec loop max name round i (p : 'a) : 'a =
 
 let identity x = x
 
+let o0 =
+  print
+  +> identity
+
 (* o1 *)
 (* Effects: TODO, TAIL CALL BROKEN  *)
 let o1 : 'a -> 'a =
@@ -529,7 +533,7 @@ let full
 let f
     ?(standalone = true)
     ?(wrap_with_fun = `Iife)
-    ?(profile = o1)
+    ?(profile = o0)
     ?(dynlink = false)
     ?(linkall = false)
     ?source_map
