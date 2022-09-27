@@ -1,3 +1,14 @@
+(* The following CPS transform is the one proposed in D. Hillerström, S.
+   Lindley, R. Atkey, and K. C. Sivaramakrishnan, “Continuation Passing Style
+   for Effect Handlers” (FSCD 2017), with adaptations to account for exception
+   handlers (which are not considered in detail in the paper) and for the fact
+   that the language is an SSA form rather than a classical lambda calculus.
+
+   It is a one-pass CPS transform which passes continuations, effect handlers
+   and exception handlers in an explicit stack. The transformation pass
+   performs some partial evaluation to perform administrative reductions during
+   the translation as much as possible, rather than leaving them for runtime. *)
+
 open Code
 
 let debug = Debug.find "eff"
@@ -592,7 +603,51 @@ let cps_alloc_stack
   ; Let (ret, Closure ([ f; v6 ], (stack_addr, [ f; v6 ])))
   ]
 
-let cps_last st (k : Var.t) (kx : Var.t) (kf : Var.t) (block_addr : Addr.t) (last : last)
+(* [Stack.t] represents partially static stacks of continuations. [Reflect]
+   means that no information is known statically and the stack evaluation is
+   left to the target language. *)
+module Stack : sig
+  type t =
+      (::) of Var.t * t
+    | []
+    | Reflect of Var.t
+
+  (** Create a dynamic stack from a static one. *)
+  val reify : t -> expr
+
+  (** [split ks] returns [(instrs,k,ks')], where [instrs] is the (possibly
+      empty) list of instructions necessary to evaluate the top of the stack
+      and bind it to [k], leaving the rest of the stack [ks]. *)
+  val split : t -> instr list * Var.t * t
+end = struct
+  type t =
+    | (::) of Var.t * t
+    | []
+    | Reflect of Var.t
+
+  let reify ks =
+    let rec aux = function
+      | [] -> let open! List in []
+      | k :: ks -> k :: aux ks
+      | Reflect v -> [v]
+    in
+    let l = aux ks in
+    Block (List.length l, Array.of_list l, Array)
+
+  let split = function
+    | k :: ks -> (let open! List in []), k, ks
+    | Reflect ks ->
+        let a = Var.fresh ()
+        and b = Var.fresh () in
+          [ Let (a, Field (ks, 0))
+          ; Let (b, Field (ks, 1))
+          ]
+        , a
+        , Reflect b
+    | [] -> raise (Invalid_argument "Stack.split")
+end
+
+let cps_last st (ks : Stack.t) (block_addr : Addr.t) (last : last)
     : instr list * last =
   let ( @> ) instrs1 (instrs2, last) = instrs1 @ instrs2, last in
   let cps_jump_cont cont =
@@ -614,10 +669,25 @@ let cps_last st (k : Var.t) (kx : Var.t) (kf : Var.t) (block_addr : Addr.t) (las
   let closure_of_cont' params = closure_of_cont st block_addr params k kx kf in
 
   match last with
-  | Return x -> cps_return x
+  | Return x ->
+      let split_instrs, k, ks = Stack.split ks in
+      let a = Var.fresh () in
+      let b = Var.fresh () in
+        split_instrs @
+          [ Let (a, Stack.reify ks)
+          ; Let (b, Apply (k, [x; a], true)) ]
+      , Return b
   | Raise (x, _) ->
+      let split_instrs, k, ks = Stack.split ks in
+      let split_instrs', kx, ks = Stack.split ks in
+      let a = Var.fresh () in
+        split_instrs @ split_instrs' @
+          [ Let (a, Apply (kx, [x], true)) ]
+      , Return a
+      (*
       let kxret = Var.fresh () in
       [ Let (kxret, Apply (kx, [ x ], true)) ], Return kxret
+      *)
   | Stop ->
       (* ??? *)
       [], Stop
