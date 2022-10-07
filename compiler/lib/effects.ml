@@ -30,98 +30,13 @@ end = struct
     [ Let (k, Field (ks, 0)); Let (ks', Field (ks, 1)) ], k, ks'
 end
 
-(* [Stack.t] represents partially static stacks of continuations. [Reflect]
-   means that no information is known statically and the stack evaluation is
-   left to the target language. *)
-module Stack : sig
-  type t
-
-  val empty : t
-  val (^::) : Var.t -> t -> t
-
-  val reify : t -> instr list * DStack.t
-  (** Create a dynamic stack from a static one. [reify ks] retuns a pair
-      [(instrs,v)], where [instrs] are the instructions necessary to create the
-      dynamic stack and bind it to [v]. *)
-
-  val reflect : DStack.t -> t
-  (** Represent a runtime stack. *)
-
-  val split : t -> instr list * Var.t * t
-  (** [split ks] returns [(instrs,k,ks')], where [instrs] is the (possibly
-      empty) list of instructions necessary to evaluate the top of the stack
-      and bind it to [k], leaving the rest of the stack [ks]. *)
-
-  val statically_known_length : t -> int
-end = struct
-  type t =
-    | ( :: ) of Var.t * t
-    | []
-    | Reflect of Var.t
-
-  let empty = []
-
-  let (^::) k ks = k :: ks
-
-  let reflect v = Reflect v
-
-  let rec reify : t -> instr list * DStack.t = function
-    | [] ->
-        let a = Var.fresh () in
-        [ Let (a, Block (0, [||], Array)) ], a
-    | k :: ks ->
-        let instrs, v = reify ks in
-        let cons_instrs, v' = DStack.cons k v in
-        instrs @ cons_instrs, v'
-    | Reflect v -> [], v
-
-  let split = function
-    | k :: ks ->
-        ( (let open! List in
-          [])
-        , k
-        , ks )
-    | Reflect ks ->
-        let a = Var.fresh () and b = Var.fresh () in
-        [ Let (a, Field (ks, 0)); Let (b, Field (ks, 1)) ], a, Reflect b
-    | [] -> raise (Invalid_argument "Stack.split")
-
-  let statically_known_length ks =
-    let rec aux acc = function
-    | [] | Reflect _ -> acc
-    | _ :: ks -> aux (acc + 1) ks
-    in
-    aux 0 ks
-end
-
 type st =
   { program : Code.program
-  ; memoized_blocks : (int * Code.block) list Addr.Map.t
-      (** The meaning of a mapping a -> [ (l_1, block_1); ...; (l_n, block_n) ] is
-          that the block at address [a] in the original program has already been
-          translated into [block_i] for a continuation stack with a statically
-          known prefix of length at least [i].
-          The list is sorted by decreasing prefix length. *)
+  ; memoized_blocks : Code.block list Addr.Map.t
+      (** The meaning of a mapping [a -> block] is
+          that the block at address [a] in the original program has already
+          been translated into [block]. *)
   }
-
-let memoized_block_for_stack ~st ~ks ~addr =
-  (* Highest prefix length should be at the list head. *)
-  let memoized = Addr.Map.find addr st.memoized_blocks in
-  (* Fetch the memoized block for the highest possible statically known length
-     (the longer the known prefix, the more optimization opportunities) that is
-     lesser than or equal to the statically known length of [ks]. *)
-  let rec best_result cur_candidate n = function
-    | [] -> cur_candidate
-    | (l, block) :: rem -> if l <= n then best_result block rem else cur_candidate
-  in
-  match memoized with
-  | [] ->
-      raise
-        (Invalid_argument "memoized_block_for_stack: should not happen: empty binding")
-  | (l, block) :: rem ->
-      if l > Stack.statically_known_length ks then
-        raise Not_found
-    else best_result block (Stack.statically_known_length ks) rem
 
 let add_block ~st block =
   let free_pc = st.program.free_pc in
@@ -137,8 +52,7 @@ let closure_of_pc_explicit_params (pc : Addr.t) ~(params : Var.t list) :
   let name = Var.fresh () in
   [ Let (name, Closure (params, (pc, params))) ], name
 
-let closure_of_pc ~st pc =
-  let arity = List.length (Addr.Map.find pc st.program.blocks).params in
+let closure_of_pc pc ~arity =
   let params = List.init arity (fun _ -> Var.fresh ()) in
   closure_of_pc_explicit_params pc ~params
 
@@ -183,14 +97,20 @@ let drop_exc_eff_conts () =
    result is returned. However, this is only possible if the statically known
    prefix of the continuation stack [ks] has the same length in both cases.
    Otherwise, the block is re-translated. *)
-let rec cps_block : orig:Code.program -> st:st -> Code.block -> addr:Addr.t -> ks:Stack.t -> Code.block * st =
- fun ~orig ~st block ~addr ~ks ->
-  try memoized_block_for_stack ~st ~ks ~addr, st
+let rec cps_block : orig:Code.program -> st:st -> Code.block -> addr:Addr.t -> Code.block * st =
+ fun ~orig ~st block ~addr ->
+  try Addr.Map.find addr st.program.blocks, st
   with Not_found ->
-    ((* Instructions to insert at the end of the block's body, new branching
-        instruction, addresses of successors (with their partially evaluated
-        stack) *)
-     let st, additional_instrs, branch, (translate_next : (Addr.t * Stack.t) list) =
+    let cps_block' ~st ~addr =
+      let block = Addr.Map.find addr orig.blocks in
+      cps_block ~orig ~st block ~addr
+    in
+
+    (let ks = Var.fresh () in (* Name of the continuation parameter in the
+                                 translated block *)
+     (* Instructions to insert at the end of the block's body, new branching
+        instruction *)
+     let st, additional_instrs, branch =
        match block.branch with
        | Return x ->
            let split_instrs, k, ks = Stack.split ks in
@@ -198,8 +118,7 @@ let rec cps_block : orig:Code.program -> st:st -> Code.block -> addr:Addr.t -> k
            let ret = Var.fresh () in
            ( st
            , split_instrs @ reify_instrs @ [ Let (ret, Apply (k, [ x; ks ], true)) ]
-           , Return ret
-           , [] )
+           , Return ret )
        | Raise (x, _) ->
            let split_instrs, _k, ks = Stack.split ks in
            let split_instrs', kx, ks = Stack.split ks in
@@ -212,16 +131,17 @@ let rec cps_block : orig:Code.program -> st:st -> Code.block -> addr:Addr.t -> k
              @ split_instrs''
              @ reify_instrs
              @ [ Let (a, Apply (kx, [ x; ks ], true)) ]
-           , Return a
-           , [] )
-       | Stop -> st, [], Stop, []
+           , Return a )
+       | Stop -> st, [], Stop
        | Branch (pc, args) ->
            let ret = Var.fresh () in
-           let create_closure, closure = closure_of_pc ~st pc in
+           let next_block, st = cps_block' ~st ~addr:pc in
+           let create_closure, closure =
+             closure_of_pc pc ~arity:(List.length next_block.params)
+           in
            ( st
-           , create_closure @ [ Let (ret, Apply (closure, args, true)) ]
-           , Return ret
-           , [ pc, ks ] )
+           , create_closure @ [ Let (ret, Apply (closure, args @ [ks], true)) ]
+           , Return ret )
        | Cond (cond, ((addr1, _) as cont1), ((addr2, _) as cont2)) ->
            let reify_instrs, ks_r = Stack.reify ks in
            let constr_call1, cont1, st = cps_call_of_jump ~st cont1 ~ks:ks_r in
