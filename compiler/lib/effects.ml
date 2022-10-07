@@ -341,6 +341,8 @@ let rec in_this_scope scope_defs v =
   | Flow.Phi s -> Var.Set.exists (in_this_scope scope_defs) s
   | Flow.Expr _ | Flow.FromOtherStack | Flow.Param -> true
 
+(* FIXME use or remove *)
+(*
 let rec entry_def_of scope_defs entry_defs v =
   try Var.Map.find v entry_defs
   with Not_found -> (
@@ -356,6 +358,7 @@ let rec entry_def_of scope_defs entry_defs v =
         assert (Var.Set.cardinal s' = 1);
         Var.Set.choose s'
     | _ -> assert false)
+*)
 
 let immediate_dominator_of_node (g : graph) dominated_by : Addr.t Addr.Map.t =
   let dom_by node = get_values node dominated_by in
@@ -392,7 +395,7 @@ let empty_jump_closures =
 let jump_closures (g : graph) dominated_by : jump_closures =
   let idom = immediate_dominator_of_node g dominated_by in
   let closure_of_jump, closure_of_alloc_site =
-    let non_handler_jumps node preds =
+    let _non_handler_jumps node preds =
       Addr.Set.cardinal
       @@ Addr.Set.filter
            (fun pred ->
@@ -401,9 +404,12 @@ let jump_closures (g : graph) dominated_by : jump_closures =
     in
 
     Addr.Map.fold
-      (fun node preds (c_o_j, c_o_a_s) ->
+      (fun node _preds (c_o_j, c_o_a_s) ->
+        (* FIXME: uncomment or remove *)
+        (*
         if non_handler_jumps node preds >= 2
         then
+        *)
           let cname = Var.fresh () in
           let idom_node = Addr.Map.find node idom in
           let closures_to_allocate =
@@ -414,7 +420,9 @@ let jump_closures (g : graph) dominated_by : jump_closures =
             Addr.Map.add idom_node ((cname, node) :: closures_to_allocate) c_o_a_s
           in
           c_o_j, c_o_a_s
-        else c_o_j, c_o_a_s)
+        (*
+        else c_o_j, c_o_a_s
+        *))
       g.preds
       (Addr.Map.empty, Addr.Map.empty)
   in
@@ -458,11 +466,6 @@ let fresh3 () = Var.fresh (), Var.fresh (), Var.fresh ()
 
 let fresh4 () = Var.fresh (), Var.fresh (), Var.fresh (), Var.fresh ()
 
-(* let fresh5 () =
-   Var.fresh (), Var.fresh (), Var.fresh (), Var.fresh (), Var.fresh () *)
-let fresh6 () =
-  Var.fresh (), Var.fresh (), Var.fresh (), Var.fresh (), Var.fresh (), Var.fresh ()
-
 let add_block st block =
   let blocks, free_pc = st.new_blocks in
   st.new_blocks <- Addr.Map.add free_pc block blocks, free_pc + 1;
@@ -497,7 +500,6 @@ let add_call_block st cname params =
 let cps_branch st pc ks cont =
   let cont = filter_cont_params st cont in
   let caddr = fst cont in
-  let params = ks :: snd cont in
   try
     let delim_by = Addr.Map.find pc st.delimited_by in
     if not (Addr.Set.mem caddr delim_by) then raise Not_found;
@@ -510,6 +512,7 @@ let cps_branch st pc ks cont =
     let interesting_param = List.hd l in
     [], Return interesting_param
   with Not_found -> (
+    let params = snd cont @ [ ks ] in
     try
       let cname = Addr.Map.find caddr st.jc.closure_of_jump in
       if not @@ debug ()
@@ -521,6 +524,9 @@ let cps_branch st pc ks cont =
       let ret = Var.fresh () in
       [ Let (ret, Apply (cname, params, false)) ], Return ret
     with Not_found -> [], Branch (caddr, params))
+
+(* Create a closure to call a block. *)
+let closure_of_pc ~st pc = Addr.Map.find pc st.jc.closure_of_jump
 
 let closure_of_cont st pc params ks cont =
   let name = Var.fresh () in
@@ -554,6 +560,8 @@ let toplevel_kf () =
   ; branch = Return ret
   }
 
+(* FIXME uncomment and use (or remove) *)
+(*
 let alloc_stack_k hv k kx kf =
   let v, ret = Var.fresh (), Var.fresh () in
   { params = [ v ]
@@ -602,6 +610,7 @@ let cps_alloc_stack
   ; Let (stack_kf, Closure ([ v4; v5 ], (stack_kf_addr, [ v4; v5 ])))
   ; Let (ret, Closure ([ f; v6 ], (stack_addr, [ f; v6 ])))
   ]
+*)
 
 (* [DStack.t] represents runtime stacks of continuations (currently implemented
    as linked lists). *)
@@ -622,93 +631,30 @@ end = struct
 
   let cons k ks =
     let res = Var.fresh () in
-    ( [ Let (res, Block (2, [| k; ks |], Array)) ]
-    , res )
+    [ Let (res, Block (2, [| k; ks |], Array)) ], res
 
   let split ks =
-    let k,ks' = fresh2 () in
-    ( [ Let (k, Field (ks, 0))
-      ; Let (ks', Field (ks, 1)) ]
-    , k
-    , ks' )
+    let k, ks' = fresh2 () in
+    [ Let (k, Field (ks, 0)); Let (ks', Field (ks, 1)) ], k, ks'
 end
 
-(* [Stack.t] represents partially static stacks of continuations. [Reflect]
-   means that no information is known statically and the stack evaluation is
-   left to the target language. *)
-module Stack : sig
-  type t =
-    | ( :: ) of Var.t * t
-    | []
-    | Reflect of DStack.t
-
-  val reify : t -> instr list * DStack.t
-  (** Create a dynamic stack from a static one. [reify ks] retuns a pair
-      [(instrs,v)], where [instrs] are the instructions necessary to create the
-      dynamic stack and bind it to [v]. *)
-
-  val reflect : DStack.t -> t
-  (** Represent a runtime stack. *)
-
-  val split : t -> instr list * Var.t * t
-  (** [split ks] returns [(instrs,k,ks')], where [instrs] is the (possibly
-      empty) list of instructions necessary to evaluate the top of the stack
-      and bind it to [k], leaving the rest of the stack [ks]. *)
-end = struct
-  type t =
-    | ( :: ) of Var.t * t
-    | []
-    | Reflect of Var.t
-
-  let reflect v = Reflect v
-
-  let rec reify : t -> instr list * DStack.t = function
-    | [] ->
-        let a = Var.fresh () in
-        [ Let (a, Block (0, [||], Array)) ], a
-    | k :: ks ->
-        let instrs, v = reify ks in
-        let cons_instrs, v' = DStack.cons k v in
-        instrs @ cons_instrs, v'
-    | Reflect v -> [], v
-
-  let split = function
-    | k :: ks ->
-        ( (let open! List in
-          [])
-        , k
-        , ks )
-    | Reflect ks ->
-        let a = Var.fresh () and b = Var.fresh () in
-        [ Let (a, Field (ks, 0)); Let (b, Field (ks, 1)) ], a, Reflect b
-    | [] -> raise (Invalid_argument "Stack.split")
-end
-
-let drop_exc_eff_conts () =
-  let x,ks = fresh2 () in
+let drop_kx_and_kh () =
+  let x, ks = fresh2 () in
   let split1, _kx, ks' = DStack.split ks in
   let split2, _kf, ks' = DStack.split ks' in
   let split3, k, ks' = DStack.split ks' in
   let ret = Var.fresh () in
-  let body =
-    split1 @ split2 @ split3 @
-      [ Let (ret, Apply (k, [ x; ks' ], true)) ]
-  in
+  let body = split1 @ split2 @ split3 @ [ Let (ret, Apply (k, [ x; ks' ], true)) ] in
   { params = [ x; ks ]; handler = None; body; branch = Return ret }
 
-let cps_exn_handler calling_addr handler_cont =
-  let e,ks = fresh2 () in
-  let ret = Var.fresh () in
-  let handler, handler_closure =
-    closure_of_cont st calling_addr [ e ] ks 
-  let body = [ Let (ret, Apply (handler, [ e; ks ], true)) ] in
-  { params = [ e; ks ]; handler = None; body; branch = Return ret }
-
-let cps_last st (ks : Stack.t) (block_addr : Addr.t) (last : last) : instr list * last =
+let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr list * last
+    =
+  (*
   let ( @> ) instrs1 (instrs2, last) = instrs1 @ instrs2, last in
+  *)
   let cps_jump_cont cont =
     let pc, args = filter_cont_params st cont in
-    let args = k :: kx :: kf :: args in
+    let args = args @ [ ks ] in
     try
       let cname = Addr.Map.find pc st.jc.closure_of_jump in
       let call_block = add_call_block st cname args in
@@ -716,30 +662,24 @@ let cps_last st (ks : Stack.t) (block_addr : Addr.t) (last : last) : instr list 
     with Not_found -> pc, args
   in
 
-  let cps_return x =
-    let kret = Var.fresh () in
-    [ Let (kret, Apply (k, [ x ], true)) ], Return kret
-  in
-
-  let cps_branch' = cps_branch st block_addr k kx kf in
-  let closure_of_cont' params = closure_of_cont st block_addr params k kx kf in
+  let cps_branch' = cps_branch st block_addr ks in
+  let _closure_of_cont' params = closure_of_cont st block_addr params ks in
 
   match last with
   | Return x ->
-      let split_instrs, k, ks = Stack.split ks in
-      let a = Var.fresh () in
-      let b = Var.fresh () in
-      ( split_instrs @ [ Let (a, Stack.reify ks); Let (b, Apply (k, [ x; a ], true)) ]
-      , Return b )
+      let split_instrs, k, ks = DStack.split ks in
+      let ret = Var.fresh () in
+      split_instrs @ [ Let (ret, Apply (k, [ x; ks ], true)) ], Return ret
   | Raise (x, _) ->
-      let split_instrs, _k, ks = Stack.split ks in
-      let split_instrs', kx, ks = Stack.split ks in
-      let split_instrs'', _kf, ks = Stack.split ks in
-      let reify_instrs, ks = Stack.reify ks in
-      let a = Var.fresh () in
-      ( split_instrs @ split_instrs' @ split_instrs'' @ reify_instrs @
-          [ Let (a, Apply (kx, [ x; ks ], true)) ]
-      , Return a)
+      let split_instrs, _k, ks = DStack.split ks in
+      let split_instrs', kx, ks = DStack.split ks in
+      let split_instrs'', _kf, ks = DStack.split ks in
+      let ret = Var.fresh () in
+      ( split_instrs
+        @ split_instrs'
+        @ split_instrs''
+        @ [ Let (ret, Apply (kx, [ x; ks ], true)) ]
+      , Return ret )
   | Stop ->
       (* ??? *)
       [], Stop
@@ -747,49 +687,74 @@ let cps_last st (ks : Stack.t) (block_addr : Addr.t) (last : last) : instr list 
   | Cond (x, cont1, cont2) -> [], Cond (x, cps_jump_cont cont1, cps_jump_cont cont2)
   | Switch (x, c1, c2) ->
       [], Switch (x, Array.map cps_jump_cont c1, Array.map cps_jump_cont c2)
-  | Pushtrap (cont1, x, cont2, _conts) -> (
-      let drop_exc_eff_conts_addr = add_block st (drop_exc_eff_conts ()) in
-      let drop_exc_eff_conts_id = Var.fresh () in
+  | Pushtrap (cont_body, _x, cont_handler, _) ->
+      (* Read effect continuations from the continuation stack. Note that we
+         don't use the pure and exceptional continuations, but we don't drop
+         them; they are still present in the new continuation stack in the form
+         of [ks']. *)
+      let split_instrs1, _k, ks' = DStack.split ks in
+      let split_instrs2, _kx, ks' = DStack.split ks' in
+      let split_instrs3, kf, ks' = DStack.split ks' in
 
-      let split_instrs, k, ks' = Stack.split ks in
-      let split_instrs', kx, ks' = Stack.split ks' in
-      let split_instrs'', kf, ks' = Stack.split ks' in
-      let handler_stack = Var.fresh () in
-      let handler_body, handler_body_closure =
-        closure_of_cont st block_addr [ x ] handler_stack cont2
-      in
-      let handler_block =
-        let e,ks,ret = fresh3 () in
-        let body = [ Let (ret, Apply (handler_body, [ handler_stack ], true)) ] in
-        { params = [ e; ks ]; handler = None; body; branch = Return ret }
-      in
-      let handler_dyn_stack = Var.fresh () in
-      let handler_cont = (add_block st handler_block, [ x; handler_dyn_stack ]) in
-      let handler, handler_closure =
-        closure_of_cont st block_addr [ x; handler_dyn_stack ]
-          handler_dyn_stack handler_cont
-      in
-      let body, body_closure =
-        closure_of_cont st block_addr [ assert false ] (assert false) cont1
-      in
+      (* Construct body closure *)
+      let body_addr, body_args = cont_body in
+      let body_closure = closure_of_pc ~st body_addr in
 
-      let x_var, ks_var = fresh2 () in
-      ( [ Let (drop_exc_eff_conts_id, Closure ([ x_var; ks_var ],
-                (drop_exc_eff_conts_addr, [ x_var; ks_var ])))
-        ; Let (handler, handler_closure)
+      (* Construct pure continuation *)
+      let kret_addr = add_block st (drop_kx_and_kh ()) in
+      let kret = closure_of_pc ~st kret_addr in
+
+      (* Construct handler closure *)
+      let handler_addr, handler_args = cont_handler in
+      let handler_ks = Var.fresh () in
+      let new_kx = Var.fresh () in
+      let handler_wrapper_args =
+        List.map (fun _ -> Var.fresh ()) handler_args @ [ handler_ks ]
+      in
+      let constr_new_kx =
+        [ Let
+            (new_kx, Closure (handler_wrapper_args, (handler_addr, handler_wrapper_args)))
         ]
-      , assert false )
-  )
-  | Poptrap (cont, _) ->
-      let old_kx = Addr.Map.find (fst cont) st.kx_of_poptrap in
-      cps_branch st block_addr k old_kx kf cont
-  | Resume (ret, (stack, func, args), cont_opt) -> (
+      in
+
+      (* Construct body continuation stack *)
+      let constr_body_ks1, body_ks = DStack.cons kf ks' in
+      let constr_body_ks2, body_ks = DStack.cons new_kx body_ks in
+      let constr_body_ks3, body_ks = DStack.cons kret body_ks in
+
+      let ret = Var.fresh () in
+      ( split_instrs1
+        @ split_instrs2
+        @ split_instrs3
+        @ constr_new_kx
+        @ constr_body_ks1
+        @ constr_body_ks2
+        @ constr_body_ks3
+        @ [ Let (ret, Apply (body_closure, body_args @ [ body_ks ], true)) ]
+      , Return ret )
+  | Poptrap ((next_pc, args), _) ->
+      let split1, _kret, ks = DStack.split ks in
+      let split2, _kh, ks = DStack.split ks in
+      let split3, _kf, ks = DStack.split ks in
+
+      let closure_next = closure_of_pc ~st next_pc in
+
+      let ret = Var.fresh () in
+      ( split1 @ split2 @ split3 @ [ Let (ret, Apply (closure_next, args @ [ ks ], true)) ]
+      , Return ret )
+  (*| Resume (ret, (stack, func, args), cont_opt) -> ( *)
+  | Resume _ ->
+      (*
       [ Let (ret, Apply (stack, [ func; args ], true)) ]
       @>
       match cont_opt with
       | None -> cps_return ret
-      | Some cont -> cps_branch' cont)
-  | Perform (ret, eff, cont) ->
+      | Some cont -> cps_branch' cont
+    *)
+      failwith "not implemented"
+  (*| Perform (ret, eff, cont) ->*)
+  | Perform _ ->
+      (*
       let cur_stack = Var.fresh () in
       let f, v = fresh2 () in
       let kfret = Var.fresh () in
@@ -799,25 +764,50 @@ let cps_last st (ks : Stack.t) (block_addr : Addr.t) (last : last) : instr list 
         ; Let (cur_stack, Closure ([ f; v ], (stack, [ f; v ])))
         ; Let (kfret, Apply (kf, [ eff; cur_stack ], true))
         ]
-      , Return kfret )
-  | Reperform (eff, stack) ->
+      , Return kfret
+    *)
+      failwith "not implemented"
+  (*| Reperform (eff, stack) ->*)
+  | Reperform _ ->
+      (*
       let kfret = Var.fresh () in
       [ Let (kfret, Apply (kf, [ eff; stack ], true)) ], Return kfret
-  | LastApply (ret, (f, args, full), cont_opt) -> (
-      match cont_opt with
-      | None -> [ Let (ret, Apply (f, k :: kx :: kf :: args, full)) ], Return ret
-      | Some cont ->
-          let cur_k, cur_k_closure = closure_of_cont' [ ret ] cont in
-          let ret' = Var.fresh () in
-          ( [ Let (cur_k, cur_k_closure)
-            ; Let (ret', Apply (f, cur_k :: kx :: kf :: args, full))
-            ]
-          , Return ret' ))
+    *)
+      failwith "not implemented"
+  | LastApply (x, (f, args, fully_applied), None) ->
+      [ Let (x, Apply (f, args @ [ ks ], fully_applied)) ], Return x
+  | LastApply (_x, (f, args, fully_applied), Some cont) ->
+      let split, k, ks = DStack.split ks in
 
-let cps_instr st (kx : Var.t) (kf : Var.t) (instr : instr) : instr list =
+      let ret = Var.fresh () in
+      let cont_addr, cont_args = cont in
+
+      (* Construct continuation (see the formal definition of the transform) *)
+      let cont_closure = closure_of_pc ~st cont_addr in
+      let wrapper_block =
+        let wrapper_ks = Var.fresh () in
+        let constr_cont_ks, cont_ks = DStack.cons k wrapper_ks in
+        let ret = Var.fresh () in
+        { params = List.map (fun _ -> Var.fresh ()) cont_args @ [ wrapper_ks ]
+        ; handler = None
+        ; body =
+            constr_cont_ks
+            @ [ Let (ret, Apply (cont_closure, cont_args @ [ cont_ks ], true)) ]
+        ; branch = Return ret
+        }
+      in
+      let wrapper_addr = add_block st wrapper_block in
+      let wrapper_clos = closure_of_pc wrapper_addr ~st in
+
+      let constr_f_ks, f_ks = DStack.cons wrapper_clos ks in
+
+      ( split @ constr_f_ks @ [ Let (ret, Apply (f, args @ [ f_ks ], fully_applied)) ]
+      , Return ret )
+
+let cps_instr st ~ks:(_ks : DStack.t) (instr : instr) : instr list =
   match instr with
-  | Let (x, Prim (Extern "caml_alloc_stack", [ Pv hv; Pv hx; Pv hf ])) ->
-      cps_alloc_stack st x kx kf hv hx hf
+  | Let (_x, Prim (Extern "caml_alloc_stack", [ Pv _hv; Pv _hx; Pv _hf ])) ->
+      failwith "not implemented" (*cps_alloc_stack st x kx kf hv hx hf*)
   | Let (x, Prim (Extern "caml_bvar_create", [ Pv y ]))
   | Let (x, Prim (Extern "caml_bvar_take", [ Pv y ])) ->
       (* TODO *)
@@ -831,7 +821,7 @@ let cps_instr st (kx : Var.t) (kf : Var.t) (instr : instr) : instr list =
   | _ -> [ instr ]
 
 let cps_block st block_addr block =
-  let k, kx, kf = fresh3 () in
+  let ks = Var.fresh () in
 
   let alloc_jump_closure =
     try
@@ -848,15 +838,15 @@ let cps_block st block_addr block =
     with Not_found -> []
   in
 
-  let last_instrs, last = cps_last st k kx kf block_addr block.branch in
+  let last_instrs, last = cps_last ~st ~block_addr block.branch ~ks in
 
   let body =
-    (List.map (cps_instr st kx kf) block.body |> List.flatten)
+    (List.map (cps_instr st ~ks) block.body |> List.flatten)
     @ alloc_jump_closure
     @ last_instrs
   in
 
-  { params = k :: kx :: kf :: block.params; handler = None; body; branch = last }
+  { params = ks :: block.params; handler = None; body; branch = last }
 
 let cps_blocks st = Addr.Map.mapi (cps_block st) st.blocks
 
