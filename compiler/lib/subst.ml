@@ -66,8 +66,6 @@ let last s l =
   | Resume (a, b, Some c) -> Resume (a, b, Some (subst_cont s c))
   | Perform (a, b, cont) -> Perform (a, b, subst_cont s cont)
   | Reperform _ -> l
-  | LastApply (_, _, None) -> l
-  | LastApply (a, b, Some cont) -> LastApply (a, b, Some (subst_cont s cont))
 
 let block s block =
   { params = block.params

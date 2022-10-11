@@ -410,16 +410,16 @@ let jump_closures (g : graph) dominated_by : jump_closures =
         if non_handler_jumps node preds >= 2
         then
         *)
-          let cname = Var.fresh () in
-          let idom_node = Addr.Map.find node idom in
-          let closures_to_allocate =
-            try Addr.Map.find idom_node c_o_a_s with Not_found -> []
-          in
-          let c_o_j = Addr.Map.add node cname c_o_j in
-          let c_o_a_s =
-            Addr.Map.add idom_node ((cname, node) :: closures_to_allocate) c_o_a_s
-          in
-          c_o_j, c_o_a_s
+        let cname = Var.fresh () in
+        let idom_node = Addr.Map.find node idom in
+        let closures_to_allocate =
+          try Addr.Map.find idom_node c_o_a_s with Not_found -> []
+        in
+        let c_o_j = Addr.Map.add node cname c_o_j in
+        let c_o_a_s =
+          Addr.Map.add idom_node ((cname, node) :: closures_to_allocate) c_o_a_s
+        in
+        c_o_j, c_o_a_s
         (*
         else c_o_j, c_o_a_s
         *))
@@ -499,31 +499,31 @@ let cps_branch st _pc ks cont =
   let cont = filter_cont_params st cont in
   let caddr = fst cont in
   (* FIXME remove or uncomment
+     try
+       let delim_by = Addr.Map.find pc st.delimited_by in
+       if not (Addr.Set.mem caddr delim_by) then raise Not_found;
+       if not @@ debug ()
+       then ()
+       else Printf.eprintf "Translated a jump frow %d to %d into a return\n" pc caddr;
+       let scope_defs, _ = Addr.Map.find caddr st.defs_of_exit_node in
+       let l = List.filter (in_this_scope scope_defs) (snd cont) in
+       assert (List.length l = 1);
+       let interesting_param = List.hd l in
+       [], Return interesting_param
+     with Not_found -> ( *)
+  let params = snd cont @ [ ks ] in
   try
-    let delim_by = Addr.Map.find pc st.delimited_by in
-    if not (Addr.Set.mem caddr delim_by) then raise Not_found;
+    let cname = Addr.Map.find caddr st.jc.closure_of_jump in
     if not @@ debug ()
     then ()
-    else Printf.eprintf "Translated a jump frow %d to %d into a return\n" pc caddr;
-    let scope_defs, _ = Addr.Map.find caddr st.defs_of_exit_node in
-    let l = List.filter (in_this_scope scope_defs) (snd cont) in
-    assert (List.length l = 1);
-    let interesting_param = List.hd l in
-    [], Return interesting_param
-  with Not_found -> ( *)
-    let params = snd cont @ [ ks ] in
-    try
-      let cname = Addr.Map.find caddr st.jc.closure_of_jump in
-      if not @@ debug ()
-      then ()
-      else (
-        Printf.eprintf "cps_branch: %d ~> call v%d params:" caddr (Var.idx cname);
-        List.iter (fun v -> Printf.eprintf " v%d" (Var.idx v)) params;
-        Printf.eprintf "\n\n");
-      let ret = Var.fresh () in
-      [ Let (ret, Apply (cname, params, false)) ], Return ret
-    with Not_found -> [], Branch (caddr, params)
-    (* ) *)
+    else (
+      Printf.eprintf "cps_branch: %d ~> call v%d params:" caddr (Var.idx cname);
+      List.iter (fun v -> Printf.eprintf " v%d" (Var.idx v)) params;
+      Printf.eprintf "\n\n");
+    let ret = Var.fresh () in
+    [ Let (ret, Apply (cname, params, false)) ], Return ret
+  with Not_found -> [], Branch (caddr, params)
+(* ) *)
 
 (* Create a function whose body starts at [pc]. If the original program already
    such a function, use it, otherwise we create it. *)
@@ -535,7 +535,13 @@ let closure_of_pc ~st pc ~arity =
 
     let addr_new_block =
       let params_block = List.init arity (fun _ -> Var.fresh ()) in
-      add_block st { params = params_block; handler = None; body = []; branch = Branch (pc, params_block) }
+      add_block
+        st
+        { params = params_block
+        ; handler = None
+        ; body = []
+        ; branch = Branch (pc, params_block)
+        }
     in
 
     [ Let (name, Closure (params, (addr_new_block, params))) ], name
@@ -554,12 +560,11 @@ let closure_of_cont st pc params ks cont =
   name, Closure (params, (addr, params))
 
 let toplevel_k () =
-  let x,ks = fresh2 () in
+  let x, ks = fresh2 () in
   { params = [ x; ks ]; handler = None; body = []; branch = Return x }
 
-
 let toplevel_kx () =
-  let x,ks = fresh2 () in
+  let x, ks = fresh2 () in
   { params = [ x; ks ]; handler = None; body = []; branch = Raise (x, `Normal) }
 
 let toplevel_kf () =
@@ -717,12 +722,12 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
       (* Construct body closure *)
       let body_addr, body_args = cont_body in
       let constr_body_closure, body_closure =
-        closure_of_pc ~st body_addr ~arity:(List.length body_args + 1) in
+        closure_of_pc ~st body_addr ~arity:(List.length body_args + 1)
+      in
 
       (* Construct pure continuation *)
       let kret_addr = add_block st (drop_kx_and_kh ()) in
-      let constr_kret, kret =
-        closure_of_pc ~st kret_addr ~arity:2 in
+      let constr_kret, kret = closure_of_pc ~st kret_addr ~arity:2 in
 
       (* Construct handler closure *)
       let handler_addr, handler_args = cont_handler in
@@ -730,7 +735,7 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
       let new_kx = Var.fresh () in
       let handler_wrapper_args = [ x; handler_ks ] in
       let handler_wrapper_block =
-        let x,ks = Var.fresh (), Var.fresh () in
+        let x, ks = Var.fresh (), Var.fresh () in
         { params = [ x; ks ]
         ; handler = None
         ; body = []
@@ -740,7 +745,9 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
       let handler_wrapper_addr = add_block st handler_wrapper_block in
       let constr_new_kx =
         [ Let
-            (new_kx, Closure (handler_wrapper_args, (handler_wrapper_addr, handler_wrapper_args)))
+            ( new_kx
+            , Closure (handler_wrapper_args, (handler_wrapper_addr, handler_wrapper_args))
+            )
         ]
       in
 
@@ -771,7 +778,11 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
       in
 
       let ret = Var.fresh () in
-      ( split1 @ split2 @ split3 @ constr_closure @ [ Let (ret, Apply (closure_next, args @ [ ks ], true)) ]
+      ( split1
+        @ split2
+        @ split3
+        @ constr_closure
+        @ [ Let (ret, Apply (closure_next, args @ [ ks ], true)) ]
       , Return ret )
   (*| Resume (ret, (stack, func, args), cont_opt) -> ( *)
   | Resume _ ->
@@ -805,36 +816,6 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
       [ Let (kfret, Apply (kf, [ eff; stack ], true)) ], Return kfret
     *)
       failwith "not implemented"
-  | LastApply (x, (f, args, fully_applied), None) ->
-      [ Let (x, Apply (f, args @ [ ks ], fully_applied)) ], Return x
-  | LastApply (x, (f, args, fully_applied), Some cont) ->
-      let split, k, ks = DStack.split ks in
-
-      let ret = Var.fresh () in
-      let cont_addr, cont_args = cont in
-
-      (* Construct continuation (see the formal definition of the transform) *)
-      let constr_closure, cont_closure = closure_of_pc ~st cont_addr ~arity:(List.length cont_args + 1) in
-      let wrapper_block =
-        let wrapper_ks = Var.fresh () in
-        let constr_cont_ks, cont_ks = DStack.cons k wrapper_ks in
-        let ret = Var.fresh () in
-        { params = [ x; wrapper_ks ]
-        ; handler = None
-        ; body =
-            constr_closure
-            @ constr_cont_ks
-            @ [ Let (ret, Apply (cont_closure, cont_args @ [ cont_ks ], true)) ]
-        ; branch = Return ret
-        }
-      in
-      let wrapper_addr = add_block st wrapper_block in
-      let constr_wrapper, wrapper_clos = closure_of_pc wrapper_addr ~st ~arity:2 in
-
-      let constr_f_ks, f_ks = DStack.cons wrapper_clos ks in
-
-      ( split @ constr_wrapper @ constr_f_ks @ [ Let (ret, Apply (f, args @ [ f_ks ], fully_applied)) ]
-      , Return ret )
 
 let cps_instr _st ~ks:(_ks : DStack.t) (instr : instr) : instr list =
   match instr with
@@ -842,9 +823,17 @@ let cps_instr _st ~ks:(_ks : DStack.t) (instr : instr) : instr list =
       failwith "not implemented" (*cps_alloc_stack st x kx kf hv hx hf*)
   | Let (x, Closure (params, (pc, args))) ->
       let ks = Var.fresh () in
-      [ Let (x, Closure (params @ [ks], (pc, args @ [ks]))) ]
+      [ Let (x, Closure (params @ [ ks ], (pc, args @ [ ks ]))) ]
   | Let (_, Apply _) -> assert false
   | _ -> [ instr ]
+
+let split_last xs =
+  let rec aux acc = function
+    | [] -> None
+    | [ x ] -> Some (List.rev acc, x)
+    | x :: xs -> aux (x :: acc) xs
+  in
+  aux [] xs
 
 let cps_block st block_addr block =
   let ks = Var.fresh () in
@@ -864,47 +853,64 @@ let cps_block st block_addr block =
     with Not_found -> []
   in
 
-  let last_instrs, last = cps_last ~st ~block_addr block.branch ~ks in
+  let body, last =
+    (* We handle the case of function applications (which should always end a
+       block) here, and the rest in [cps_last] *)
+    match split_last block.body, block.branch with
+    | Some (body_prefix, Let (x, Apply (f, args, fully_applied))), Return ret ->
+        ( (List.map (cps_instr st ~ks) body_prefix |> List.flatten)
+          @ alloc_jump_closure
+          @ [ Let (x, Apply (f, args @ [ ks ], fully_applied)) ]
+        , Return ret )
+    | Some (body_prefix, Let (x, Apply (f, args, fully_applied))), Branch cont ->
+        let split, k, ks = DStack.split ks in
 
-  let body =
-    (List.map (cps_instr st ~ks) block.body |> List.flatten)
-    @ alloc_jump_closure
-    @ last_instrs
+        let ret = Var.fresh () in
+        let cont_addr, cont_args = cont in
+
+        (* Construct continuation (see the formal definition of the transform) *)
+        let constr_closure, cont_closure =
+          closure_of_pc ~st cont_addr ~arity:(List.length cont_args + 1)
+        in
+        let wrapper_block =
+          let wrapper_ks = Var.fresh () in
+          let constr_cont_ks, cont_ks = DStack.cons k wrapper_ks in
+          let ret = Var.fresh () in
+          { params = [ x; wrapper_ks ]
+          ; handler = None
+          ; body =
+              constr_closure
+              @ constr_cont_ks
+              @ [ Let (ret, Apply (cont_closure, cont_args @ [ cont_ks ], true)) ]
+          ; branch = Return ret
+          }
+        in
+        let wrapper_addr = add_block st wrapper_block in
+        let constr_wrapper, wrapper_clos = closure_of_pc wrapper_addr ~st ~arity:2 in
+
+        let constr_f_ks, f_ks = DStack.cons wrapper_clos ks in
+
+        ( (List.map (cps_instr st ~ks) body_prefix |> List.flatten)
+          @ alloc_jump_closure
+          @ split
+          @ constr_wrapper
+          @ constr_f_ks
+          @ [ Let (ret, Apply (f, args @ [ f_ks ], fully_applied)) ]
+        , Return ret )
+    | Some (_, Let (_, Apply _)), _ -> assert false
+    | Some _, _ | None, _ ->
+        let last_instrs, last = cps_last ~st ~block_addr block.branch ~ks in
+        let body =
+          (List.map (cps_instr st ~ks) block.body |> List.flatten)
+          @ alloc_jump_closure
+          @ last_instrs
+        in
+        body, last
   in
 
-  { params = block.params @ [ks]; handler = None; body; branch = last }
+  { params = block.params @ [ ks ]; handler = None; body; branch = last }
 
 let cps_blocks st = Addr.Map.mapi (cps_block st) st.blocks
-
-let nop_block block =
-  let nop_last = function
-    | LastApply (ret, (f, args, full), cont_opt) -> (
-        ( [ Let (ret, Apply (f, args, full)) ]
-        , match cont_opt with
-          | None -> Return ret
-          | Some cont -> Branch cont ))
-    | last -> [], last
-  in
-  let add_instr, branch = nop_last block.branch in
-  { block with branch; body = block.body @ add_instr }
-
-let nop { start; blocks; free_pc } =
-  let g = build_graph blocks start in
-  let dom_by = dominated_by_node g in
-  if debug () then print_graph blocks g;
-
-  if not @@ debug () then () else Printf.eprintf "\nidom:\n";
-
-  let idom = immediate_dominator_of_node g dom_by in
-  if not @@ debug ()
-  then ()
-  else (
-    Addr.Map.iter (fun node dom -> Printf.eprintf "%d -> %d\n" node dom) idom;
-
-    Printf.eprintf "\n");
-
-  let blocks = Addr.Map.map nop_block blocks in
-  { start; blocks; free_pc }
 
 let pr_graph ({ start; blocks; _ } as p) =
   let g = build_graph blocks start in

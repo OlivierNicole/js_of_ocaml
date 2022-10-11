@@ -134,11 +134,6 @@ let block_deps blocks vars deps defs block =
       add_var vars x;
       add_effect_def defs x;
       cont_deps blocks vars deps defs cont
-  | LastApply (x, (f, args, b), cont_opt) ->
-      add_var vars x;
-      add_expr_def defs x (Apply (f, args, b));
-      expr_deps blocks vars deps defs x (Apply (f, args, b));
-      Option.iter ~f:(fun cont -> cont_deps blocks vars deps defs cont) cont_opt
 
 let program_deps { blocks; _ } =
   let nv = Var.count () in
@@ -277,9 +272,6 @@ let program_escape defs known_origins { blocks; _ } =
           block_escape st z
       | Perform (_, x, _) -> block_escape st x
       | Reperform (x, y) ->
-          block_escape st x;
-          block_escape st y
-      | LastApply (x, (y, _, _), _) ->
           block_escape st x;
           block_escape st y
       | Stop | Branch _ | Cond _ | Switch _ | Pushtrap _ | Poptrap _ -> ())

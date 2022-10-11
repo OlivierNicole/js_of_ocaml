@@ -333,7 +333,6 @@ type last =
   | Resume of Var.t * (Var.t * Var.t * Var.t) * cont option
   | Perform of Var.t * Var.t * cont
   | Reperform of Var.t * Var.t
-  | LastApply of Var.t * (Var.t * Var.t list * bool) * cont option
 
 type block =
   { params : Var.t list
@@ -527,36 +526,6 @@ module Print = struct
           ct
     | Reperform (eff, stack) ->
         Format.fprintf f "delegate (%a, %a)" Var.print eff Var.print stack
-    | LastApply (ret, (g, l, exact), ct_opt) ->
-        let cont_opt f = function
-          | None -> ()
-          | Some ct -> Format.fprintf f " continuation %a" cont ct
-        in
-        if exact
-        then
-          Format.fprintf
-            f
-            "%a = %a!(%a)%a"
-            Var.print
-            ret
-            Var.print
-            g
-            var_list
-            l
-            cont_opt
-            ct_opt
-        else
-          Format.fprintf
-            f
-            "%a = %a(%a)%a"
-            Var.print
-            ret
-            Var.print
-            g
-            var_list
-            l
-            cont_opt
-            ct_opt
 
   type xinstr =
     | Instr of instr
@@ -631,14 +600,12 @@ let fold_children blocks pc f accu =
     | None -> accu
   in
   match block.branch with
-  | Return _ | Raise _ | Stop | Reperform _ | Resume (_, _, None) | LastApply (_, _, None)
-    -> accu
+  | Return _ | Raise _ | Stop | Reperform _ | Resume (_, _, None) -> accu
   | Branch (pc', _)
   | Poptrap ((pc', _), _)
   | Pushtrap ((pc', _), _, _, _)
   | Resume (_, _, Some (pc', _))
-  | Perform (_, _, (pc', _))
-  | LastApply (_, _, Some (pc', _)) -> f pc' accu
+  | Perform (_, _, (pc', _)) -> f pc' accu
   | Cond (_, (pc1, _), (pc2, _)) ->
       let accu = f pc1 accu in
       let accu = f pc2 accu in
@@ -743,8 +710,6 @@ let invariant { blocks; start; _ } =
       | Resume (_, _, None) -> ()
       | Perform (_, _, cont) -> check_cont cont
       | Reperform _ -> ()
-      | LastApply (_, _, Some cont) -> check_cont cont
-      | LastApply (_, _, None) -> ()
     in
     Addr.Map.iter
       (fun _pc block ->

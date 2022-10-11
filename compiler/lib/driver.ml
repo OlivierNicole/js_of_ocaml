@@ -60,9 +60,13 @@ let specialize_js_once p =
   Specialize_js.f_once p
 
 let specialize' (p, info) =
-  let p = specialize_1 (p, info) in
-  let p = specialize_js (p, info) in
-  p, info
+  (* FIXME currently specialize' is broken with CPS. Fix it *)
+  if Config.Flag.effects ()
+  then p, info
+  else
+    let p = specialize_1 (p, info) in
+    let p = specialize_js (p, info) in
+    p, info
 
 let specialize p = fst (specialize' p)
 
@@ -80,6 +84,8 @@ let phi p =
   if debug () then Format.eprintf "Variable passing simplification...@.";
   Phisimpl.f p
 
+let effects p = if Config.Flag.effects () then Effects.f p else p
+
 let print p =
   if debug () then Code.Print.program (fun _ _ -> "") p;
   p
@@ -96,9 +102,7 @@ let rec loop max name round i (p : 'a) : 'a =
 
 let identity x = x
 
-let o0 =
-  print
-  +> identity
+let _o0 = print +> identity
 
 (* o1 *)
 (* Effects: TODO, TAIL CALL BROKEN  *)
@@ -510,7 +514,8 @@ let full
 
   let opt =
     configure formatter
-    +> Effects.f
+    +> (if debug () then print else fun x -> x)
+    +> effects
     +> specialize_js_once
     +> profile
     +> Generate_closure.f
@@ -533,7 +538,7 @@ let full
 let f
     ?(standalone = true)
     ?(wrap_with_fun = `Iife)
-    ?(profile = o0)
+    ?(profile = o1)
     ?(dynlink = false)
     ?(linkall = false)
     ?source_map

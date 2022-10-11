@@ -621,8 +621,7 @@ let fold_children blocks pc f accu =
   | Return _ | Raise _ | Stop
   | Resume (_, _, _)
   | Perform (_, _, _)
-  | Reperform (_, _)
-  | LastApply (_, _, _) -> accu
+  | Reperform (_, _) -> accu
   | Branch (pc', _) | Poptrap ((pc', _), _) -> f pc' accu
   | Pushtrap ((pc1, _), _, (pc2, _), _) ->
       let accu = f pc1 accu in
@@ -1705,7 +1704,6 @@ and compile_conditional st queue pc last handler backs frontier interm succs :
     | Resume _ -> Format.eprintf "resume"
     | Perform _ -> Format.eprintf "perform"
     | Reperform _ -> Format.eprintf "reperform"
-    | LastApply _ -> Format.eprintf "LastApply"
     | Cond _ -> Format.eprintf "@[<hv 2>cond{@,"
     | Switch _ -> Format.eprintf "@[<hv 2>switch{@,");
   let loc = source_location st.ctx pc in
@@ -1813,8 +1811,6 @@ and compile_conditional st queue pc last handler backs frontier interm succs :
             false
         in
         flush_all queue (code, Var.Set.union cont_tc1 cont_tc2)
-    | LastApply (_, _, Some cont) ->
-        flush_all queue (compile_branch st [] cont None backs frontier interm)
     | _ -> assert false
   in
   (if debug ()

@@ -115,13 +115,11 @@ let rewrite_block (pc', handler) pc blocks =
 let fold_children blocks pc f accu =
   let block = Addr.Map.find pc blocks in
   match block.branch with
-  | Return _ | Raise _ | Stop | Reperform _ | Resume (_, _, None) | LastApply (_, _, None)
-    -> accu
+  | Return _ | Raise _ | Stop | Reperform _ | Resume (_, _, None) -> accu
   | Branch (pc', _)
   | Poptrap ((pc', _), _)
   | Resume (_, _, Some (pc', _))
-  | Perform (_, _, (pc', _))
-  | LastApply (_, _, Some (pc', _)) -> f pc' accu
+  | Perform (_, _, (pc', _)) -> f pc' accu
   | Pushtrap (_, _, (pc1, _), pcs) -> f pc1 (Addr.Set.fold f pcs accu)
   | Cond (_, (pc1, _), (pc2, _)) ->
       let accu = f pc1 accu in
