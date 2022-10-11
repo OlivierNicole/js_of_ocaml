@@ -523,7 +523,8 @@ let cps_branch st pc ks cont =
       [ Let (ret, Apply (cname, params, false)) ], Return ret
     with Not_found -> [], Branch (caddr, params))
 
-(* Create a closure to call a block. *)
+(* Create a function whose body starts at [pc]. If the original program already
+   such a function, use it, otherwise we create it. *)
 let closure_of_pc ~st pc ~arity =
   try [], Addr.Map.find pc st.jc.closure_of_jump
   with Not_found ->
