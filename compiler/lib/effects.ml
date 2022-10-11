@@ -335,14 +335,14 @@ let merge_defs_of_exit_scope d1 d2 =
   in
   Addr.Map.merge m d1 d2
 
+(* FIXME use or remove *)
+(*
 let rec in_this_scope scope_defs v =
   let v = Var.idx v in
   match scope_defs.(v) with
   | Flow.Phi s -> Var.Set.exists (in_this_scope scope_defs) s
   | Flow.Expr _ | Flow.FromOtherStack | Flow.Param -> true
 
-(* FIXME use or remove *)
-(*
 let rec entry_def_of scope_defs entry_defs v =
   try Var.Map.find v entry_defs
   with Not_found -> (
@@ -495,9 +495,10 @@ let add_call_block st cname params =
   Hashtbl.add st.jc.allocated_call_blocks cname addr;
   addr
 
-let cps_branch st pc ks cont =
+let cps_branch st _pc ks cont =
   let cont = filter_cont_params st cont in
   let caddr = fst cont in
+  (* FIXME remove or uncomment
   try
     let delim_by = Addr.Map.find pc st.delimited_by in
     if not (Addr.Set.mem caddr delim_by) then raise Not_found;
@@ -509,7 +510,7 @@ let cps_branch st pc ks cont =
     assert (List.length l = 1);
     let interesting_param = List.hd l in
     [], Return interesting_param
-  with Not_found -> (
+  with Not_found -> ( *)
     let params = snd cont @ [ ks ] in
     try
       let cname = Addr.Map.find caddr st.jc.closure_of_jump in
@@ -521,7 +522,8 @@ let cps_branch st pc ks cont =
         Printf.eprintf "\n\n");
       let ret = Var.fresh () in
       [ Let (ret, Apply (cname, params, false)) ], Return ret
-    with Not_found -> [], Branch (caddr, params))
+    with Not_found -> [], Branch (caddr, params)
+    (* ) *)
 
 (* Create a function whose body starts at [pc]. If the original program already
    such a function, use it, otherwise we create it. *)
