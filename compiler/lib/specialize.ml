@@ -53,6 +53,7 @@ let specialize_instr info (acc, free_pc, extra) i =
       match function_cardinality info f [] with
       | None -> i :: acc, free_pc, extra
       | Some n when n = n' -> Let (x, Apply (f, l, true)) :: acc, free_pc, extra
+      (*
       | Some n when n < n' ->
           assert (n >= 4);
           let k', f' = Code.Var.(fresh (), fresh ()) in
@@ -100,6 +101,7 @@ let specialize_instr info (acc, free_pc, extra) i =
             :: acc
           , free_pc + 1
           , (free_pc, block) :: extra )
+      *)
       | _ -> i :: acc, free_pc, extra)
   | _ -> i :: acc, free_pc, extra
 
