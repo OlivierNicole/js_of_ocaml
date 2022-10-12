@@ -31,29 +31,26 @@ function caml_call_gen(f, args) {
   if (d == 0) {
     return f.apply(null, args);
   } else if (d < 0) {
-    var k = args[0];
-    var kx = args[1];
-    var kf = args[2];
-    var rest = new Array(argsLen - n + 3);
-    rest[0] = k;
-    rest[1] = kx;
-    rest[2] = kf;
-    for(var i = n; i < argsLen; i++) rest[i-n+3] = args[i];
-    var a = new Array(n);
-    a[0] = function (x){ return caml_call_gen(x, rest); };
-    for(var i = 1; i < n; i++) a[i] = args[i];
-    return f.apply(null, a);
+    var rest = args.slice(n - 1);
+    var k = args [argsLen - 1];
+    args = args.slice(0, n);
+    args[n - 1] = [0, function (g, k2) {
+      var args = rest.slice();
+      args[args.length - 1] = [0, k[1], k2];
+      return caml_call_gen(g, args); }, k[2]];
+    return f.apply(null, args);
   } else {
-    var k = args[0];
-    return k(function (k2, kx2, kf2, x) {
-        var a = new Array(argsLen+1);
-        a[0] = k2;
-        a[1] = kx2;
-        a[2] = kf2;
-        for(var i = 3; i < argsLen; i++) a[i] = args[i];
-        a[argsLen] = x;
-        return caml_call_gen(f, a);
-    });
+    argsLen--;
+    var k = args [argsLen];
+    return k[1] (function () {
+      var extra_args = (arguments.length == 0)?1:arguments.length;
+      var nargs = new Array(argsLen + extra_args);
+      for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
+      for(var i = 0; i < arguments.length; i++ )
+        nargs[argsLen + i] = arguments[i];
+      return caml_call_gen(f, nargs)
+    },
+                 k[2]);
   }
 }
 
