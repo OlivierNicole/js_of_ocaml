@@ -1060,6 +1060,10 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
     let constr2, ks = DStack.cons kf nil in
     let constr3, ks = DStack.cons kx ks in
     let constr4, ks = DStack.cons k ks in
+    let main = Var.fresh () in
+    let main_arg = Var.fresh () in
+    let args = Var.fresh () in
+    let res = Var.fresh () in
     add_block
       st
       { params = []
@@ -1068,12 +1072,16 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
           [ Let (k, Closure ([ x1; ks1 ], (toplevel_k_addr, [ x1; ks1 ])))
           ; Let (kx, Closure ([ x2; ks2 ], (toplevel_kx_addr, [ x2; ks2 ])))
           ; Let (kf, Closure ([ x3; ks3 ], (toplevel_kf_addr, [ x3; ks3 ])))
+          ; Let (main, Closure ([ main_arg ], (start, [ main_arg ])))
           ]
           @ constr1
           @ constr2
           @ constr3
           @ constr4
-      ; branch = Branch (start, [ ks ])
+          @ [ Let (args, Block (0, [| ks |], Array))
+            ; Let (res, Prim (Extern "caml_effect_setup", [ Pv main; Pv args ]))
+            ]
+      ; branch = Return res
       }
   in
   let new_blocks, free_pc = st.new_blocks in

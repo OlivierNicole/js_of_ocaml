@@ -729,13 +729,25 @@ let parallel_renaming params args continuation queue =
 
 let apply_fun_raw ctx f params =
   let n = List.length params in
-  J.ECond
-    ( J.EBin (J.EqEq, J.EDot (f, "length"), int n)
-    , ecall f params J.N
-    , ecall
-        (runtime_fun ctx "caml_call_gen")
-        [ f; J.EArr (List.map params ~f:(fun x -> Some x)) ]
-        J.N )
+  let apply =
+    J.ECond
+      ( J.EBin (J.EqEq, J.EDot (f, "length"), int n)
+      , ecall f params J.N
+      , ecall
+          (runtime_fun ctx "caml_call_gen")
+          [ f; J.EArr (List.map params ~f:(fun x -> Some x)) ]
+          J.N )
+  in
+  if Config.Flag.effects ()
+  then
+    J.ECond
+      ( ecall (runtime_fun ctx "caml_stack_check_depth") [] J.N
+      , apply
+      , ecall
+          (runtime_fun ctx "caml_trampoline_return")
+          [ f; J.EArr (List.map params ~f:(fun x -> Some x)) ]
+          J.N )
+  else apply
 
 let generate_apply_fun ctx n =
   let f' = Var.fresh_n "f" in

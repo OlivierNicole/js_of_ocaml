@@ -50,6 +50,32 @@ function caml_trampoline_return(f,args) {
   return {joo_tramp:f,joo_args:args};
 }
 
+//Provides:caml_stack_depth
+var caml_stack_depth = 0;
+
+//Provides:caml_effect_setup
+//Requires:caml_stack_depth, caml_call_gen
+function caml_effect_setup(f,args) {
+    var depth = caml_stack_depth;
+    try {
+        caml_stack_depth = 40;
+        var res = f.apply(null, args.slice(1));
+        while(res && res.joo_tramp){
+            caml_stack_depth = 40;
+            res = caml_call_gen(res.joo_tramp, res.joo_args);
+        }
+    } finally {
+        caml_stack_depth = depth;
+    }
+    return res;
+}
+
+//Provides:caml_stack_check_depth
+//Requires:caml_stack_depth
+function caml_stack_check_depth() {
+    return ((--caml_stack_depth) > 0);
+}
+
 //Provides: js_print_stdout (const)
 //Requires: caml_utf16_of_utf8
 function js_print_stdout(s) {
