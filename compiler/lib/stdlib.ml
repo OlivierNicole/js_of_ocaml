@@ -258,6 +258,14 @@ module List = struct
           aux f (rev_append xs acc) l
     in
     aux f [] l
+
+  let split_last xs =
+    let rec aux acc = function
+      | [] -> None
+      | [ x ] -> Some (rev acc, x)
+      | x :: xs -> aux (x :: acc) xs
+    in
+    aux [] xs
 end
 
 let ( @ ) = List.append

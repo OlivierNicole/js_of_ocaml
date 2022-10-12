@@ -827,14 +827,6 @@ let cps_instr _st ~ks:(_ks : DStack.t) (instr : instr) : instr list =
   | Let (_, Apply _) -> assert false
   | _ -> [ instr ]
 
-let split_last xs =
-  let rec aux acc = function
-    | [] -> None
-    | [ x ] -> Some (List.rev acc, x)
-    | x :: xs -> aux (x :: acc) xs
-  in
-  aux [] xs
-
 let cps_block st block_addr block =
   let ks = Var.fresh () in
 
@@ -856,7 +848,7 @@ let cps_block st block_addr block =
   let body, last =
     (* We handle the case of function applications (which should always end a
        block) here, and the rest in [cps_last] *)
-    match split_last block.body, block.branch with
+    match Stdlib.List.split_last block.body, block.branch with
     | Some (body_prefix, Let (x, Apply (f, args, fully_applied))), Return ret ->
         ( (List.map (cps_instr st ~ks) body_prefix |> List.flatten)
           @ alloc_jump_closure

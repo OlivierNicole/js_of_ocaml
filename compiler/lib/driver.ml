@@ -88,10 +88,7 @@ let phi p =
 
 let effects p =
   if Config.Flag.effects ()
-  then
-    (let ( +> ) f g x = g (f x) in
-     Effects.f +> inline +> deadcode +> phi +> flow +> specialize)
-      p
+  then Effects.f p |> inline |> deadcode |> phi |> flow |> specialize |> Trampoline.f
   else p
 
 let print p =
