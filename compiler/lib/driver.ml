@@ -29,7 +29,7 @@ let should_export = function
 
 let tailcall p =
   if debug () then Format.eprintf "Tail-call optimization...@.";
-  Tailcall.f p
+  if Config.Flag.effects () then p else Tailcall.f p
 
 let deadcode' p =
   if debug () then Format.eprintf "Dead-code...@.";
