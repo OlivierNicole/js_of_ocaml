@@ -488,7 +488,7 @@ let add_call_block st cname params =
       st
       { params = fresh_params
       ; handler = None
-      ; body = [ Let (ret, Apply (cname, params, false)) ]
+      ; body = [ Let (ret, Apply (cname, params, true)) ]
       ; branch = Return ret
       }
   in
@@ -521,7 +521,7 @@ let cps_branch st _pc ks cont =
       List.iter (fun v -> Printf.eprintf " v%d" (Var.idx v)) params;
       Printf.eprintf "\n\n");
     let ret = Var.fresh () in
-    [ Let (ret, Apply (cname, params, false)) ], Return ret
+    [ Let (ret, Apply (cname, params, true)) ], Return ret
   with Not_found -> [], Branch (caddr, params)
 (* ) *)
 
