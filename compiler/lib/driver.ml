@@ -86,7 +86,13 @@ let phi p =
   if debug () then Format.eprintf "Variable passing simplification...@.";
   Phisimpl.f p
 
-let effects p = if Config.Flag.effects () then Effects.f p else p
+let effects p =
+  if Config.Flag.effects ()
+  then
+    (let ( +> ) f g x = g (f x) in
+     Effects.f +> inline +> deadcode +> phi +> flow +> specialize)
+      p
+  else p
 
 let print p =
   if debug () then Code.Print.program (fun _ _ -> "") p;
@@ -517,9 +523,9 @@ let full
   let opt =
     configure formatter
     +> (if debug () then print else fun x -> x)
-    +> effects
     +> specialize_js_once
     +> profile
+    +> effects
     +> Generate_closure.f
     +> deadcode'
   in
