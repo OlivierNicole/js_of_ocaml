@@ -54,6 +54,12 @@ function caml_call_gen(f, args) {
   }
 }
 
+//Provides: caml_callback
+//Requires: caml_effect_setup, caml_fatal_unhandled_effect
+function caml_callback(f, args) {
+    return caml_effect_setup(f, [0].concat(args.concat([[0, function(x,k){return x;}, [0, function(x,k){throw x;}, [0, function(x,k){caml_fatal_unhandled_effect(x)}, 0]]]])));
+}
+
 //Provides: caml_named_values
 var caml_named_values = {};
 
