@@ -35,6 +35,13 @@ let build_graph (blocks : block Addr.Map.t) (pc : Addr.t) : graph =
       let visited = Addr.Set.add pc visited in
       let anc = Addr.Set.add pc anc in
       let s = Code.fold_children blocks pc Addr.Set.add Addr.Set.empty in
+      let s =
+        (* Changed from Generate.build_graph *)
+        match (Addr.Map.find pc blocks).branch with
+        | Pushtrap (_, _, (pc', _), _) -> Addr.Set.add pc' s
+        | _ -> s
+      in
+
       let backs = Addr.Set.inter s anc in
 
       let succs = Addr.Set.filter (fun pc -> not (Addr.Set.mem pc anc)) s in
@@ -850,6 +857,7 @@ let cps_block st block_addr block =
        block) here, and the rest in [cps_last] *)
     match Stdlib.List.split_last block.body, block.branch with
     | Some (body_prefix, Let (x, Apply (f, args, fully_applied))), Return ret ->
+        assert (alloc_jump_closure = []);
         ( (List.map (cps_instr st ~ks) body_prefix |> List.flatten)
           @ alloc_jump_closure
           @ [ Let (x, Apply (f, args @ [ ks ], fully_applied)) ]
@@ -871,7 +879,8 @@ let cps_block st block_addr block =
           { params = [ x; wrapper_ks ]
           ; handler = None
           ; body =
-              constr_closure
+              alloc_jump_closure
+              @ constr_closure
               @ constr_cont_ks
               @ [ Let (ret, Apply (cont_closure, cont_args @ [ cont_ks ], true)) ]
           ; branch = Return ret
@@ -883,7 +892,6 @@ let cps_block st block_addr block =
         let constr_f_ks, f_ks = DStack.cons wrapper_clos ks in
 
         ( (List.map (cps_instr st ~ks) body_prefix |> List.flatten)
-          @ alloc_jump_closure
           @ split
           @ constr_wrapper
           @ constr_f_ks
