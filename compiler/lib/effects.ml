@@ -1094,3 +1094,9 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
       new_blocks
   in
   { start = new_start; blocks; free_pc }
+
+let f p =
+  let t = Timer.make () in
+  let p' = f p in
+  if Debug.find "times" () then Format.eprintf "  effects: %a@." Timer.print t;
+  p'
