@@ -54,20 +54,45 @@ function caml_trampoline_return(f,args) {
 var caml_stack_depth = 0;
 
 //Provides:caml_effect_setup
-//Requires:caml_stack_depth, caml_call_gen
+//Requires:caml_stack_depth, caml_call_gen, caml_exn_stack,caml_wrap_exception
 function caml_effect_setup(f,args) {
     var depth = caml_stack_depth;
+    var saved_stack = caml_exn_stack;
     try {
         caml_stack_depth = 40;
-        var res = f.apply(null, args.slice(1));
+        caml_exn_stack = [];
+        var res = {joo_tramp: f, joo_args: args.slice(1)};
         while(res && res.joo_tramp){
             caml_stack_depth = 40;
-            res = caml_call_gen(res.joo_tramp, res.joo_args);
+            try {
+                res = caml_call_gen(res.joo_tramp, res.joo_args);
+            } catch (e) {
+                var h = caml_exn_stack.pop();
+                if (!h) throw e;
+                res = {joo_tramp: h.handler,
+                       joo_args: [caml_wrap_exception(e), h.conts]};
+            }
         }
     } finally {
         caml_stack_depth = depth;
+        caml_exn_stack = saved_stack;
     }
     return res;
+}
+
+//Provides: caml_exn_stack
+var caml_exn_stack = [];
+
+//Provides: caml_push_trap
+//Requires: caml_exn_stack
+function caml_push_trap(handler, conts) {
+    caml_exn_stack.push({handler:handler, conts:conts});
+}
+
+//Provides: caml_pop_trap
+//Requires: caml_exn_stack
+function caml_pop_trap() {
+    caml_exn_stack.pop();
 }
 
 //Provides:caml_stack_check_depth

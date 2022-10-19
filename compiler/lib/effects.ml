@@ -707,6 +707,7 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
       ( split_instrs
         @ split_instrs'
         @ split_instrs''
+        @ [ Let (Var.fresh (), Prim (Extern "caml_pop_trap", [])) ]
         @ [ Let (ret, Apply (kx, [ x; ks ], true)) ]
       , Return ret )
   | Stop ->
@@ -717,6 +718,7 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
   | Switch (x, c1, c2) ->
       [], Switch (x, Array.map cps_jump_cont c1, Array.map cps_jump_cont c2)
   | Pushtrap (cont_body, x, cont_handler, _) ->
+      let ks0 = ks in
       (* Read effect continuations from the continuation stack. Note that we
          don't use the pure and exceptional continuations, but we don't drop
          them; they are still present in the new continuation stack in the form
@@ -772,6 +774,7 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
         @ constr_body_ks1
         @ constr_body_ks2
         @ constr_body_ks3
+        @ [ Let (Var.fresh (), Prim (Extern "caml_push_trap", [ Pv new_kx; Pv ks0 ])) ]
         @ [ Let (ret, Apply (body_closure, body_args @ [ body_ks ], true)) ]
       , Return ret )
   | Poptrap ((next_pc, args), _) ->
@@ -788,6 +791,7 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
         @ split2
         @ split3
         @ constr_closure
+        @ [ Let (Var.fresh (), Prim (Extern "caml_pop_trap", [])) ]
         @ [ Let (ret, Apply (closure_next, args @ [ ks ], true)) ]
       , Return ret )
   (*| Resume (ret, (stack, func, args), cont_opt) -> ( *)
