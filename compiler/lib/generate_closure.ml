@@ -485,3 +485,9 @@ let f p : Code.program =
   in
   Code.invariant p;
   p
+
+let f p =
+  let t = Timer.make () in
+  let p' = f p in
+  if Debug.find "times" () then Format.eprintf "  generate closures: %a@." Timer.print t;
+  p'
