@@ -87,7 +87,7 @@ let build_graph (blocks : block Addr.Map.t) (pc : Addr.t) : graph =
 let print_graph blocks (g : graph) =
   if not @@ debug ()
   then ()
-  else begin
+  else
     let is_handler_succ v v' =
       match (Addr.Map.find v blocks).handler with
       | None -> false
@@ -118,7 +118,6 @@ let print_graph blocks (g : graph) =
     (*   ) s *)
     (* ) g.preds; *)
     Printf.eprintf "}\n"
-  end
 
 let dominated_by_node (g : graph) : Addr.Set.t Addr.Map.t =
   let explore_avoiding v =
@@ -950,7 +949,7 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
         let closure_does = defs_of_exit_scope blocks cfg closure_en in
 
         if debug ()
-        then begin
+        then (
           Printf.eprintf "\nidom:\n";
 
           let idom = immediate_dominator_of_node cfg dom_by in
@@ -1019,8 +1018,7 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
                 (fun k v -> Printf.eprintf "v%d -> v%d\n" (Var.idx k) (Var.idx v))
                 entry_defs;
               Printf.eprintf "\n")
-            closure_does
-        end;
+            closure_does);
 
         ( merge_jump_closures closure_jc jc
         , merge_exit_nodes closure_en en
