@@ -468,8 +468,6 @@ type st =
 
 let fresh2 () = Var.fresh (), Var.fresh ()
 
-let fresh3 () = Var.fresh (), Var.fresh (), Var.fresh ()
-
 let add_block st block =
   let blocks, free_pc = st.new_blocks in
   st.new_blocks <- Addr.Map.add free_pc block blocks, free_pc + 1;
@@ -565,22 +563,6 @@ let closure_of_cont st pc params ks cont =
   in
   name, Closure (params, (addr, params))
 
-let toplevel_k () =
-  let x, ks = fresh2 () in
-  { params = [ x; ks ]; handler = None; body = []; branch = Return x }
-
-let toplevel_kx () =
-  let x, ks = fresh2 () in
-  { params = [ x; ks ]; handler = None; body = []; branch = Raise (x, `Normal) }
-
-let toplevel_kf () =
-  let x, ks, ret = fresh3 () in
-  { params = [ x; ks ]
-  ; handler = None
-  ; body = [ Let (ret, Prim (Extern "caml_fatal_unhandled_effect", [ Pv x ])) ]
-  ; branch = Return ret
-  }
-
 (* FIXME uncomment and use (or remove) *)
 (*
 let alloc_stack_k hv k kx kf =
@@ -638,10 +620,6 @@ let cps_alloc_stack
 module DStack : sig
   type t = Var.t
 
-  val nil : unit -> instr list * Var.t
-  (** [nil ()] returns a pair [(instrs, ks)], where [[instrs] is a list of
-      instructions binding [ks] to an empty stack. *)
-
   val cons : Var.t -> t -> instr list * t
   (** [cons k ks] returns a pair [(instrs,ks')], where [instrs] is the list of
       instructions necessary to push [k] onto [ks] and [ks'] is the resulting
@@ -651,30 +629,62 @@ module DStack : sig
   (** [split ks] returns [(instrs,k,ks')], where [instrs] is the list of
       instructions necessary to evaluate the top of the stack
       and bind it to [k], leaving the rest of the stack [ks]. *)
+
+  val pop_trap : t -> instr list * Var.t * t
+
+  val push_trap : Var.t -> t -> instr list * t
 end = struct
   type t = Var.t
 
-  let nil () =
-    let v = Var.fresh () in
-    [ Let (v, Block (0, [||], Array)) ], v
-
   let cons k ks =
     let res = Var.fresh () in
-    [ Let (res, Block (0, [| k; ks |], Array)) ], res
+    [ Let (res, Block (0, [| k; ks |], NotArray)) ], res
 
   let split ks =
     let k, ks' = fresh2 () in
     [ Let (k, Field (ks, 0)); Let (ks', Field (ks, 1)) ], k, ks'
-end
 
-let drop_kx_and_kh () =
-  let x, ks = fresh2 () in
-  let split1, _kx, ks' = DStack.split ks in
-  let split2, _kf, ks' = DStack.split ks' in
-  let split3, k, ks' = DStack.split ks' in
-  let ret = Var.fresh () in
-  let body = split1 @ split2 @ split3 @ [ Let (ret, Apply (k, [ x; ks' ], true)) ] in
-  { params = [ x; ks ]; handler = None; body; branch = Return ret }
+  let pop_trap ks =
+    (*  (k, ((e, k', es), fs)) ==> e (k', (es, fs)) *)
+    let h = Var.fresh () in
+    let es = Var.fresh () in
+    let es' = Var.fresh () in
+    let fs = Var.fresh () in
+    let e = Var.fresh () in
+    let k' = Var.fresh () in
+    let h' = Var.fresh () in
+    let ks' = Var.fresh () in
+    ( [ Let (h, Field (ks, 1))
+      ; Let (es', Field (h, 0))
+      ; Let (fs, Field (h, 1))
+      ; Let (e, Field (es', 0))
+      ; Let (k', Field (es', 1))
+      ; Let (es, Field (es', 2))
+      ; Let (h', Block (0, [| es; fs |], NotArray))
+      ; Let (ks', Block (0, [| k'; h' |], NotArray))
+      ]
+    , e
+    , ks' )
+
+  let push_trap e ks =
+    (* push_trap: e (k, (es, fs))  ==> (k, ((e, k, es), fs)) *)
+    let k = Var.fresh () in
+    let h = Var.fresh () in
+    let es = Var.fresh () in
+    let fs = Var.fresh () in
+    let es' = Var.fresh () in
+    let h' = Var.fresh () in
+    let ks' = Var.fresh () in
+    ( [ Let (k, Field (ks, 0))
+      ; Let (h, Field (ks, 1))
+      ; Let (es, Field (h, 0))
+      ; Let (fs, Field (h, 1))
+      ; Let (es', Block (0, [| e; k; es |], NotArray))
+      ; Let (h', Block (0, [| es'; fs |], NotArray))
+      ; Let (ks', Block (0, [| k; h' |], NotArray))
+      ]
+    , ks' )
+end
 
 let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr list * last
     =
@@ -700,13 +710,9 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
       let ret = Var.fresh () in
       split_instrs @ [ Let (ret, Apply (k, [ x; ks ], true)) ], Return ret
   | Raise (x, _) ->
-      let split_instrs, _k, ks = DStack.split ks in
-      let split_instrs', kx, ks = DStack.split ks in
-      let split_instrs'', _kf, ks = DStack.split ks in
+      let pop_instrs, kx, ks = DStack.pop_trap ks in
       let ret = Var.fresh () in
-      ( split_instrs
-        @ split_instrs'
-        @ split_instrs''
+      ( pop_instrs
         @ [ Let (Var.fresh (), Prim (Extern "caml_pop_trap", [])) ]
         @ [ Let (ret, Apply (kx, [ x; ks ], true)) ]
       , Return ret )
@@ -718,24 +724,11 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
   | Switch (x, c1, c2) ->
       [], Switch (x, Array.map cps_jump_cont c1, Array.map cps_jump_cont c2)
   | Pushtrap (cont_body, x, cont_handler, _) ->
-      let ks0 = ks in
-      (* Read effect continuations from the continuation stack. Note that we
-         don't use the pure and exceptional continuations, but we don't drop
-         them; they are still present in the new continuation stack in the form
-         of [ks]. *)
-      let split_instrs1, _k, ks' = DStack.split ks in
-      let split_instrs2, _kx, ks' = DStack.split ks' in
-      let split_instrs3, kf, _ks' = DStack.split ks' in
-
       (* Construct body closure *)
       let body_addr, body_args = cont_body in
       let constr_body_closure, body_closure =
         closure_of_pc ~st body_addr ~arity:(List.length body_args + 1)
       in
-
-      (* Construct pure continuation *)
-      let kret_addr = add_block st (drop_kx_and_kh ()) in
-      let constr_kret, kret = closure_of_pc ~st kret_addr ~arity:2 in
 
       (* Construct handler closure *)
       let handler_addr, handler_args = cont_handler in
@@ -760,36 +753,24 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
       in
 
       (* Construct body continuation stack *)
-      let constr_body_ks1, body_ks = DStack.cons kf ks in
-      let constr_body_ks2, body_ks = DStack.cons new_kx body_ks in
-      let constr_body_ks3, body_ks = DStack.cons kret body_ks in
+      let constr_body_ks, body_ks = DStack.push_trap new_kx ks in
 
       let ret = Var.fresh () in
-      ( split_instrs1
-        @ split_instrs2
-        @ split_instrs3
-        @ constr_body_closure
-        @ constr_kret
+      ( constr_body_closure
         @ constr_new_kx
-        @ constr_body_ks1
-        @ constr_body_ks2
-        @ constr_body_ks3
-        @ [ Let (Var.fresh (), Prim (Extern "caml_push_trap", [ Pv new_kx; Pv ks0 ])) ]
+        @ constr_body_ks
+        @ [ Let (Var.fresh (), Prim (Extern "caml_push_trap", [ Pv new_kx; Pv ks ])) ]
         @ [ Let (ret, Apply (body_closure, body_args @ [ body_ks ], true)) ]
       , Return ret )
   | Poptrap ((next_pc, args), _) ->
-      let split1, _kret, ks = DStack.split ks in
-      let split2, _kh, ks = DStack.split ks in
-      let split3, _kf, ks = DStack.split ks in
+      let pop, _, ks = DStack.pop_trap ks in
 
       let constr_closure, closure_next =
         closure_of_pc ~st next_pc ~arity:(List.length args + 1)
       in
 
       let ret = Var.fresh () in
-      ( split1
-        @ split2
-        @ split3
+      ( pop
         @ constr_closure
         @ [ Let (Var.fresh (), Prim (Extern "caml_pop_trap", [])) ]
         @ [ Let (ret, Apply (closure_next, args @ [ ks ], true)) ]
@@ -1050,18 +1031,7 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
     Var.Set.iter (fun c -> Printf.eprintf " v%d" (Var.idx c)) !cont_closures;
     Printf.eprintf "\n\n%!");
 
-  let k, kx, kf = fresh3 () in
-  let toplevel_k_addr = add_block st (toplevel_k ()) in
-  let toplevel_kx_addr = add_block st (toplevel_kx ()) in
-  let toplevel_kf_addr = add_block st (toplevel_kf ()) in
   let new_start =
-    let x1, ks1 = fresh2 () in
-    let x2, ks2 = fresh2 () in
-    let x3, ks3 = fresh2 () in
-    let constr1, nil = DStack.nil () in
-    let constr2, ks = DStack.cons kf nil in
-    let constr3, ks = DStack.cons kx ks in
-    let constr4, ks = DStack.cons k ks in
     let main = Var.fresh () in
     let main_arg = Var.fresh () in
     let args = Var.fresh () in
@@ -1071,18 +1041,10 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
       { params = []
       ; handler = None
       ; body =
-          [ Let (k, Closure ([ x1; ks1 ], (toplevel_k_addr, [ x1; ks1 ])))
-          ; Let (kx, Closure ([ x2; ks2 ], (toplevel_kx_addr, [ x2; ks2 ])))
-          ; Let (kf, Closure ([ x3; ks3 ], (toplevel_kf_addr, [ x3; ks3 ])))
-          ; Let (main, Closure ([ main_arg ], (start, [ main_arg ])))
+          [ Let (main, Closure ([ main_arg ], (start, [ main_arg ])))
+          ; Let (args, Prim (Extern "%js_array", []))
+          ; Let (res, Prim (Extern "caml_callback", [ Pv main; Pv args ]))
           ]
-          @ constr1
-          @ constr2
-          @ constr3
-          @ constr4
-          @ [ Let (args, Block (0, [| ks |], Array))
-            ; Let (res, Prim (Extern "caml_effect_setup", [ Pv main; Pv args ]))
-            ]
       ; branch = Return res
       }
   in

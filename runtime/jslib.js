@@ -54,15 +54,22 @@ function caml_trampoline_return(f,args) {
 //Provides:caml_stack_depth
 var caml_stack_depth = 0;
 
-//Provides:caml_effect_setup
-//Requires:caml_stack_depth, caml_call_gen, caml_exn_stack,caml_wrap_exception
-function caml_effect_setup(f,args) {
+//Provides: caml_callback
+//Requires:caml_stack_depth, caml_call_gen, caml_exn_stack,caml_wrap_exception,caml_fatal_unhandled_effect
+function caml_callback(f,args) {
+    var k = function (x,k){return x;};
+    var ks =
+        [0,
+         k,
+         [0,
+          [0, function(x,k){throw x;}, k, 0],
+          [0, function(x,k){caml_fatal_unhandled_effect(x)}, 0]]];
     var depth = caml_stack_depth;
     var saved_stack = caml_exn_stack;
     try {
         caml_stack_depth = 40;
         caml_exn_stack = [];
-        var res = {joo_tramp: f, joo_args: args.slice(1)};
+        var res = {joo_tramp: f, joo_args: args.concat([ks])};
         while(res && res.joo_tramp){
             caml_stack_depth = 40;
             try {
