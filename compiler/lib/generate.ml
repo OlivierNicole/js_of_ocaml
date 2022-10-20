@@ -1230,6 +1230,7 @@ let rec translate_expr ctx queue loc _x e level : _ * J.statement_list =
               | J.ENum i -> Int32.to_int (J.Num.to_int32 i), queue
               | _ -> assert false
             in
+            let i = if Config.Flag.effects () then i + 1 else i in
             let args = Array.to_list (Array.init i ~f:(fun _ -> J.V (Var.fresh ()))) in
             let f = J.V (Var.fresh ()) in
             let call =
