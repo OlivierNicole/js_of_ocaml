@@ -20,7 +20,8 @@
 ///////////// Jslib
 
 //Provides: caml_js_pure_expr const
-function caml_js_pure_expr (f) { return f(); }
+//Requires: caml_callback
+function caml_js_pure_expr (f) { return caml_callback(f, [0]); }
 
 //Provides: caml_js_set (mutable, const, const)
 function caml_js_set(o,f,v) { o[f]=v;return 0}
