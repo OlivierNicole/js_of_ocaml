@@ -308,7 +308,7 @@ let window_event () : 'a #event t = Js.Unsafe.pure_js_expr "event"
    using addEventListener... *)
 let handler f =
   Js.some
-    (Js.Unsafe.callback (fun e ->
+    (Js.Unsafe.callback_with_arity 1 (fun e ->
          (* depending on the internet explorer version, e can be null or undefined. *)
          if not (Js.Opt.test (some e))
          then (
@@ -323,7 +323,7 @@ let handler f =
 
 let full_handler f =
   Js.some
-    (Js.Unsafe.meth_callback (fun this e ->
+    (Js.Unsafe.meth_callback_with_arity 1 (fun this e ->
          (* depending on the internet explorer version, e can be null or undefined *)
          if not (Js.Opt.test (some e))
          then (

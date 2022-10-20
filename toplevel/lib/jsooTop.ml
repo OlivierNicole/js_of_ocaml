@@ -87,7 +87,7 @@ let setup =
        flush stderr;
        res);
      Js.Unsafe.global##.toplevelReloc
-     := Js.Unsafe.callback (fun name ->
+     := Js.Unsafe.callback_with_arity 1 (fun name ->
             let name = Js.to_string name in
             Js_of_ocaml_compiler.Ocaml_compiler.Symtable.reloc_ident name);
      ())
