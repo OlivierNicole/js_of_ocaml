@@ -618,10 +618,8 @@ end
 let fold_children blocks pc f accu =
   let block = Addr.Map.find pc blocks in
   match block.branch with
-  | Return _ | Raise _ | Stop
-  | Resume (_, _, _)
-  | Perform (_, _, _)
-  | Reperform (_, _) -> accu
+  | Return _ | Raise _ | Stop | Resume (_, _, _, _) | Perform (_, _, _) | Reperform (_, _)
+    -> accu
   | Branch (pc', _) | Poptrap ((pc', _), _) -> f pc' accu
   | Pushtrap ((pc1, _), _, (pc2, _), _) ->
       let accu = f pc1 accu in
@@ -1824,7 +1822,7 @@ and compile_conditional st queue pc last handler backs frontier interm succs :
             false
         in
         flush_all queue (code, Var.Set.union cont_tc1 cont_tc2)
-    | _ -> assert false
+    | Resume _ | Perform _ | Reperform _ -> assert false
   in
   (if debug ()
   then

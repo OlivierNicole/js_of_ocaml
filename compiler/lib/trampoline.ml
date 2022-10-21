@@ -49,7 +49,7 @@ let trampoline_block ~program ~pc ~block =
   | Stop | Branch _ | Cond (_, _, _) | Switch (_, _, _) | Raise (_, _) -> program
   | Poptrap (_, _)
   | Pushtrap (_, _, _, _)
-  | Resume (_, _, _)
+  | Resume (_, _, _, _)
   | Perform (_, _, _)
   | Reperform (_, _) -> assert false
 

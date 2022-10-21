@@ -330,7 +330,7 @@ type last =
   | Switch of Var.t * cont array * cont array
   | Pushtrap of cont * Var.t * cont * Addr.Set.t
   | Poptrap of cont * Addr.t
-  | Resume of Var.t * (Var.t * Var.t * Var.t) * cont option
+  | Resume of Var.t * Var.t * Var.t * (Var.t * cont) option
   | Perform of Var.t * Var.t * cont
   | Reperform of Var.t * Var.t
 
@@ -488,44 +488,42 @@ module Print = struct
           cont2
           (String.concat ~sep:", " (List.map (Addr.Set.elements pcs) ~f:string_of_int))
     | Poptrap (c, _) -> Format.fprintf f "poptrap %a" cont c
-    | Resume (ret, (stack, func, arg), Some ct) ->
+    | Resume (stack, func, arg, Some (ret, ct)) ->
         Format.fprintf
           f
-          "%a = resume (%a, %a, %a) continuation %a"
-          Var.print
-          ret
+          "resume (%a, %a, %a) continuation %a => %a"
           Var.print
           stack
           Var.print
           func
           Var.print
           arg
+          Var.print
+          ret
           cont
           ct
-    | Resume (ret, (stack, func, arg), None) ->
+    | Resume (stack, func, arg, None) ->
         Format.fprintf
           f
-          "%a = resume_term (%a, %a, %a)"
-          Var.print
-          ret
+          "resume_term (%a, %a, %a)"
           Var.print
           stack
           Var.print
           func
           Var.print
           arg
-    | Perform (ret, eff, ct) ->
+    | Perform (eff, ret, ct) ->
         Format.fprintf
           f
-          "%a = perform %a continuation %a"
-          Var.print
-          ret
+          "perform %a continuation %a => %a"
           Var.print
           eff
+          Var.print
+          ret
           cont
           ct
     | Reperform (eff, stack) ->
-        Format.fprintf f "delegate (%a, %a)" Var.print eff Var.print stack
+        Format.fprintf f "reperform (%a, %a)" Var.print eff Var.print stack
 
   type xinstr =
     | Instr of instr
@@ -600,11 +598,11 @@ let fold_children blocks pc f accu =
     | None -> accu
   in
   match block.branch with
-  | Return _ | Raise _ | Stop | Reperform _ | Resume (_, _, None) -> accu
+  | Return _ | Raise _ | Stop | Reperform _ | Resume (_, _, _, None) -> accu
   | Branch (pc', _)
   | Poptrap ((pc', _), _)
   | Pushtrap ((pc', _), _, _, _)
-  | Resume (_, _, Some (pc', _))
+  | Resume (_, _, _, Some (_, (pc', _)))
   | Perform (_, _, (pc', _)) -> f pc' accu
   | Cond (_, (pc1, _), (pc2, _)) ->
       let accu = f pc1 accu in
@@ -706,8 +704,8 @@ let invariant { blocks; start; _ } =
           check_cont cont1;
           check_cont cont2
       | Poptrap (cont, _) -> check_cont cont
-      | Resume (_, _, Some cont) -> check_cont cont
-      | Resume (_, _, None) -> ()
+      | Resume (_, _, _, Some (_, cont)) -> check_cont cont
+      | Resume (_, _, _, None) -> ()
       | Perform (_, _, cont) -> check_cont cont
       | Reperform _ -> ()
     in

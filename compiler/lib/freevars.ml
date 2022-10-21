@@ -70,12 +70,12 @@ let iter_last_free_var f l =
   | Pushtrap (cont1, _, cont2, _) ->
       iter_cont_free_vars f cont1;
       iter_cont_free_vars f cont2
-  | Resume (x, _, None) -> f x
-  | Resume (x, _, Some cont) ->
-      f x;
-      iter_cont_free_vars f cont
-  | Perform (v0, v1, cont) ->
-      f v0;
+  | Resume (a, b, c, cont_opt) ->
+      f a;
+      f b;
+      f c;
+      Option.iter ~f:(fun (_, cont) -> iter_cont_free_vars f cont) cont_opt
+  | Perform (v1, _, cont) ->
       f v1;
       iter_cont_free_vars f cont
   | Reperform (v0, v1) ->
@@ -94,10 +94,9 @@ let iter_instr_bound_vars f i =
 let iter_last_bound_vars f l =
   match l with
   | Return _ | Raise _ | Stop | Branch _ | Cond _ | Switch _ | Poptrap _
-  | Resume (_, _, _)
-  | Perform (_, _, _)
+  | Resume (_, _, _, None)
   | Reperform (_, _) -> ()
-  | Pushtrap (_, x, _, _) -> f x
+  | Perform (x, _, _) | Resume (_, _, _, Some (x, _)) | Pushtrap (_, x, _, _) -> f x
 
 let iter_block_bound_vars f block =
   List.iter ~f block.params;

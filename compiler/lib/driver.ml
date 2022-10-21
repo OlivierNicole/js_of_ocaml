@@ -88,7 +88,9 @@ let phi p =
 
 let effects p =
   if Config.Flag.effects ()
-  then Effects.f p |> inline |> deadcode |> phi |> flow |> specialize |> Trampoline.f
+  then (
+    if debug () then Format.eprintf "Effects...@.";
+    Effects.f p |> inline |> deadcode |> phi |> flow |> specialize |> Trampoline.f)
   else p
 
 let print p =

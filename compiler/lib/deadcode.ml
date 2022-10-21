@@ -101,11 +101,17 @@ and mark_reachable st pc =
     | Pushtrap (cont1, _, cont2, _) ->
         mark_cont_reachable st cont1;
         mark_cont_reachable st cont2
-    (* FIXME no longer true since CPS is optional *)
-    (* Constructors [Resume], [Perform], [Reperform] are not
-       supposed to be present when applying dead code elimination (they should
-       be eliminated by CPS transformation first). *)
-    | Resume _ | Perform _ | Reperform _ -> assert false)
+    | Perform (eff, _, cont) ->
+        mark_var st eff;
+        mark_cont_reachable st cont
+    | Resume (stack, func, arg, cont_opt) ->
+        mark_var st stack;
+        mark_var st func;
+        mark_var st arg;
+        Option.iter ~f:(fun (_, cont) -> mark_cont_reachable st cont) cont_opt
+    | Reperform (eff, stack) ->
+        mark_var st eff;
+        mark_var st stack)
 
 (****)
 
@@ -148,8 +154,8 @@ let filter_live_last blocks st l =
         , filter_cont blocks st cont2
         , Addr.Set.inter pcs st.reachable_blocks )
   | Poptrap (cont, addr) -> Poptrap (filter_cont blocks st cont, addr)
-  | Resume (_, _, None) -> l
-  | Resume (a, b, Some c) -> Resume (a, b, Some (filter_cont blocks st c))
+  | Resume (_, _, _, None) -> l
+  | Resume (a, b, c, Some (d, e)) -> Resume (a, b, c, Some (d, filter_cont blocks st e))
   | Perform (a, b, cont) -> Perform (a, b, filter_cont blocks st cont)
   | Reperform _ -> l
 
@@ -214,8 +220,8 @@ let f ({ blocks; _ } as p : Code.program) =
           Array.iter a2 ~f:(fun cont -> add_cont_dep blocks defs cont)
       | Pushtrap (cont, _, _, _) -> add_cont_dep blocks defs cont
       | Poptrap (cont, _) -> add_cont_dep blocks defs cont
-      | Resume (_, _, cont_opt) ->
-          Option.iter ~f:(fun cont -> add_cont_dep blocks defs cont) cont_opt
+      | Resume (_, _, _, cont_opt) ->
+          Option.iter ~f:(fun (_, cont) -> add_cont_dep blocks defs cont) cont_opt
       | Perform (_, _, cont) -> add_cont_dep blocks defs cont)
     blocks;
   let st = { live; defs; blocks; reachable_blocks = Addr.Set.empty; pure_funs } in

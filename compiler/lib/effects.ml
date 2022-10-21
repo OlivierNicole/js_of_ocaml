@@ -688,9 +688,8 @@ end
 
 let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr list * last
     =
-  (*
   let ( @> ) instrs1 (instrs2, last) = instrs1 @ instrs2, last in
-  *)
+
   let cps_jump_cont cont =
     let pc, args = filter_cont_params st cont in
     let args = args @ [ ks ] in
@@ -775,17 +774,18 @@ let cps_last ~st ~(block_addr : Addr.t) (last : last) ~(ks : DStack.t) : instr l
         @ [ Let (Var.fresh (), Prim (Extern "caml_pop_trap", [])) ]
         @ [ Let (ret, Apply (closure_next, args @ [ ks ], true)) ]
       , Return ret )
-  (*| Resume (ret, (stack, func, args), cont_opt) -> ( *)
-  | Resume _ ->
-      (*
-      [ Let (ret, Apply (stack, [ func; args ], true)) ]
-      @>
+  | Resume (stack, func, args, cont_opt) -> (
       match cont_opt with
-      | None -> cps_return ret
-      | Some cont -> cps_branch' cont
-    *)
-      failwith "not implemented"
-  (*| Perform (ret, eff, cont) ->*)
+      | None ->
+          let split_instrs, k, ks = DStack.split ks in
+          let ret = Var.fresh () in
+          ( [ Let (ret, Apply (stack, [ func; args ], true)) ]
+            @ split_instrs
+            @ [ Let (ret, Apply (k, [ ret; ks ], true)) ]
+          , Return ret )
+      | Some (ret, cont) ->
+          [ Let (ret, Apply (stack, [ func; args ], true)) ] @> cps_branch' cont
+          (*| Perform (eff, ret, cont) ->*))
   | Perform _ ->
       (*
       let cur_stack = Var.fresh () in
