@@ -126,11 +126,14 @@ let block_deps blocks vars deps defs block =
       Array.iter ~f:(fun cont -> cont_deps blocks vars deps defs cont) a1;
       Array.iter ~f:(fun cont -> cont_deps blocks vars deps defs cont) a2
   | Pushtrap (cont, _, _, _) -> cont_deps blocks vars deps defs cont
-  | Resume (x, _, cont_opt) ->
-      add_var vars x;
-      add_effect_def defs x;
-      Option.iter ~f:(fun cont -> cont_deps blocks vars deps defs cont) cont_opt
-  | Perform (x, _, cont) ->
+  | Resume (_, _, _, cont_opt) ->
+      Option.iter
+        ~f:(fun (x, cont) ->
+          add_var vars x;
+          add_effect_def defs x;
+          cont_deps blocks vars deps defs cont)
+        cont_opt
+  | Perform (_, x, cont) ->
       add_var vars x;
       add_effect_def defs x;
       cont_deps blocks vars deps defs cont
@@ -265,12 +268,11 @@ let program_escape defs known_origins { blocks; _ } =
                 (Var.Tbl.get known_origins x));
       match block.branch with
       | Return x | Raise (x, _) -> block_escape st x
-      (* todo? *)
-      | Resume (_, (x, y, z), _) ->
+      | Resume (x, y, z, _) ->
           block_escape st x;
           block_escape st y;
           block_escape st z
-      | Perform (_, x, _) -> block_escape st x
+      | Perform (x, _, _) -> block_escape st x
       | Reperform (x, y) ->
           block_escape st x;
           block_escape st y

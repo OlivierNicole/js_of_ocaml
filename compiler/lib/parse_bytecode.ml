@@ -833,13 +833,7 @@ let rec compile_block blocks debug_data code pc state =
     | Switch (_, l1, l2) ->
         Array.iter l1 ~f:(fun (pc', _) -> compile_block blocks debug_data code pc' state');
         Array.iter l2 ~f:(fun (pc', _) -> compile_block blocks debug_data code pc' state')
-    | Pushtrap _
-    | Raise _
-    | Return _
-    | Stop
-    | Resume _
-    | Perform _
-    | Reperform _ -> ())
+    | Pushtrap _ | Raise _ | Return _ | Stop | Resume _ | Perform _ | Reperform _ -> ())
 
 and compile infos pc state instrs =
   if debug_parser () then State.print state;
@@ -2099,20 +2093,19 @@ and compile infos pc state instrs =
         let ret, state = State.fresh_var state in
         compile_block infos.blocks infos.debug code (pc + 1) state;
         ( instrs
-        , Resume (ret, (stack, func, arg), Some (pc + 1, State.stack_vars state))
+        , Resume (stack, func, arg, Some (ret, (pc + 1, State.stack_vars state)))
         , state )
     | RESUMETERM ->
         let stack = State.accu state in
         let func = State.peek 0 state in
         let arg = State.peek 1 state in
         let state = State.pop 2 state in
-        let ret, state = State.fresh_var state in
-        instrs, Resume (ret, (stack, func, arg), None), state
+        instrs, Resume (stack, func, arg, None), state
     | PERFORM ->
         let eff = State.accu state in
         let ret, state = State.fresh_var state in
         compile_block infos.blocks infos.debug code (pc + 1) state;
-        instrs, Perform (ret, eff, (pc + 1, State.stack_vars state)), state
+        instrs, Perform (eff, ret, (pc + 1, State.stack_vars state)), state
     | REPERFORMTERM ->
         let eff = State.accu state in
         let stack = State.peek 0 state in

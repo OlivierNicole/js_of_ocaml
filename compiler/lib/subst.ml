@@ -62,9 +62,10 @@ let last s l =
         , Array.map a1 ~f:(fun cont -> subst_cont s cont)
         , Array.map a2 ~f:(fun cont -> subst_cont s cont) )
   | Poptrap (cont, addr) -> Poptrap (subst_cont s cont, addr)
-  | Resume (_, _, None) -> l
-  | Resume (a, b, Some c) -> Resume (a, b, Some (subst_cont s c))
-  | Perform (a, b, cont) -> Perform (a, b, subst_cont s cont)
+  | Resume (a, b, c, cont_opt) ->
+      Resume
+        (s a, s b, s c, Option.map ~f:(fun (x, cont) -> x, subst_cont s cont) cont_opt)
+  | Perform (eff, x, cont) -> Perform (s eff, x, subst_cont s cont)
   | Reperform _ -> l
 
 let block s block =
