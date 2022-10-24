@@ -280,7 +280,6 @@ struct
     | Variable_statement _
     | Empty_statement
     | Expression_statement _
-    | Suspended_statement _
     | Continue_statement _
     | Break_statement _
     | Return_statement _
@@ -1124,7 +1123,6 @@ struct
             block f b;
             PP.end_group f);
         PP.end_group f
-    | Suspended_statement _ -> assert false
 
   and statement_list f ?skip_last_semi b =
     match b with

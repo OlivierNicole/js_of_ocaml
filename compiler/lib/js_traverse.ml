@@ -97,7 +97,6 @@ class map : mapper =
       | Return_statement e -> Return_statement (m#expression_o e)
       | Labelled_statement (l, (s, loc)) -> Labelled_statement (l, (m#statement s, loc))
       | Throw_statement e -> Throw_statement (m#expression e)
-      | Suspended_statement thunk -> Suspended_statement thunk
       | Switch_statement (e, l, def, l') ->
           Switch_statement
             ( m#expression e
@@ -257,7 +256,6 @@ class iter : iterator =
       | Return_statement e -> m#expression_o e
       | Labelled_statement (_, (s, _)) -> m#statement s
       | Throw_statement e -> m#expression e
-      | Suspended_statement _ -> ()
       | Switch_statement (e, l, def, l') ->
           m#expression e;
           List.iter l ~f:(fun (e, s) ->
@@ -345,16 +343,6 @@ class iter : iterator =
     method sources x = List.iter x ~f:(fun (s, _) -> m#source s)
 
     method program x = m#sources x
-  end
-
-class unsuspend =
-  object (self)
-    inherit map as super
-
-    method statement =
-      function
-      | Suspended_statement thunk -> self#statement (thunk ())
-      | s -> super#statement s
   end
 
 (* var substitution *)

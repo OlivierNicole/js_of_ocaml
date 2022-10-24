@@ -201,7 +201,6 @@ and statement =
       expression * case_clause list * statement_list option * case_clause list
   | Throw_statement of expression
   | Try_statement of block * (ident * block) option * block option
-  | Suspended_statement of (unit -> statement)
   | Debugger_statement
 
 and ('left, 'right) either =
