@@ -98,7 +98,7 @@ class type freevar =
 
 class free : freevar
 
-class rename_variable : StringSet.t -> freevar
+class rename_variable : mapper
 
 class share_constant : mapper
 
