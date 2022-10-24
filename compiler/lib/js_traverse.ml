@@ -636,63 +636,92 @@ class free =
       | _ -> super#statement x
   end
 
-class rename_variable keeps =
-  object
-    inherit free as super
-
-    val mutable sub_ = new subst (fun x -> x)
-
-    method merge_info from =
-      super#merge_info from;
-      let h = Hashtbl.create 17 in
-      let _ =
-        StringSet.iter
-          (fun name ->
-            if StringSet.mem name keeps
-            then ()
-            else
-              let v = Code.Var.fresh_n name in
-              Hashtbl.add h name v)
-          from#state.def_name
-      in
-      let f = function
-        | S { name; _ } when Hashtbl.mem h name -> V (Hashtbl.find h name)
-        | s -> s
-      in
-      sub_ <- new subst f
-
-    (* method block params *)
-    method expression x =
-      let x = super#expression x in
+class rename_variable =
+  let update_subst ident params body subst =
+    let declared_names = ref StringSet.empty in
+    let def_var x =
       match x with
-      | EFun _ -> sub_#expression x
-      | _ -> x
+      | S { name; _ } -> declared_names := StringSet.add name !declared_names
+      | _ -> ()
+    in
+    Option.iter ~f:def_var ident;
+    List.iter ~f:def_var params;
+    (object
+       inherit iter as super
 
-    method statement x =
-      let x = super#statement x in
-      match x with
-      | Try_statement (b, w, f) ->
-          let w =
-            match w with
-            | Some (S { name; _ }, block) ->
-                let v = Code.Var.fresh_n name in
-                let sub = function
-                  | S { name = name'; _ } when String.equal name' name -> V v
-                  | x -> x
-                in
-                let s = new subst sub in
-                Some (V v, s#statements block)
-            | x -> x
-          in
-          Try_statement (b, w, f)
-      | _ -> x
+       method expression _ = ()
 
-    method source x =
-      let x = super#source x in
+       method source x =
+         match x with
+         | Function_declaration _ -> ()
+         | Statement _ -> super#source x
+
+       method variable_declaration (id, _) = def_var id
+    end)
+      #sources
+      body;
+    ( StringSet.fold
+        (fun name subst -> StringMap.add name (Code.Var.fresh_n name) subst)
+        !declared_names
+        subst
+    , !declared_names )
+  in
+
+  object (m)
+    inherit map as super
+
+    val mutable subst = StringMap.empty
+
+    val mutable decl = StringSet.empty
+
+    method ident x =
       match x with
-      | Function_declaration (id, params, body, nid) ->
-          Function_declaration (id, List.map params ~f:sub_#ident, sub_#sources body, nid)
-      | Statement _ -> x
+      | V _ -> x
+      | S { name; _ } -> ( try V (StringMap.find name subst) with Not_found -> x)
+
+    method expression e =
+      let subst0 = subst in
+      let decl0 = decl in
+      (match e with
+      | EFun (ident, params, body, _) ->
+          let subst', decl' = update_subst ident params body subst0 in
+          subst <- subst';
+          decl <- decl'
+      | _ -> ());
+      let e' = super#expression e in
+      subst <- subst0;
+      decl <- decl0;
+      e'
+
+    method statement s =
+      match s with
+      | Try_statement (b, Some ((S { name; _ } as id), block), final)
+        when not (StringSet.mem name decl) ->
+          Try_statement
+            ( m#statements b
+            , (let subst0 = subst in
+               subst <- StringMap.add name (Code.Var.fresh_n name) subst;
+               let c = Some (m#ident id, m#statements block) in
+               subst <- subst0;
+               c)
+            , match final with
+              | None -> None
+              | Some s -> Some (m#statements s) )
+      | _ -> super#statement s
+
+    method source s =
+      let subst0 = subst in
+      let decl0 = decl in
+      (match s with
+      | Function_declaration (ident, params, body, _) ->
+          let subst', decl' = update_subst (Some ident) params body subst0 in
+          subst <- subst';
+          decl <- decl'
+      | _ -> ());
+      let s' = super#source s in
+      subst <- subst0;
+      decl <- decl0;
+      s'
   end
 
 class compact_vardecl =
