@@ -617,7 +617,7 @@ class free =
                   | S { name; _ } -> set, StringSet.remove name sets
                   | V i -> S.remove i set, sets
                 in
-                let def, def_name = clean tbody#state.def tbody#state.def_name in
+                let def, def_name = tbody#state.def, tbody#state.def_name in
                 let use, use_name = clean tbody#state.use tbody#state.use_name in
                 state_ <-
                   { use = S.union state_.use use
