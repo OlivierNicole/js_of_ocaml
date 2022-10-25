@@ -176,8 +176,6 @@ type trywith_exit_nodes =
   ; exit_of_entry : Addr.t option Addr.Map.t
   }
 
-let empty_exit_nodes = { entry_of_exit = Addr.Map.empty; exit_of_entry = Addr.Map.empty }
-
 let trywith_exit_nodes (blocks : block Addr.Map.t) (g : graph) dominated_by :
     trywith_exit_nodes =
   let rec loop node (entry_of_exit, exit_of_entry, visited) =
@@ -221,16 +219,6 @@ let trywith_exit_nodes (blocks : block Addr.Map.t) (g : graph) dominated_by :
   in
   { entry_of_exit; exit_of_entry }
 
-let merge_exit_nodes en1 en2 =
-  let m _ a b =
-    match a, b with
-    | Some x, None | None, Some x -> Some x
-    | _ -> assert false
-  in
-  { entry_of_exit = Addr.Map.merge m en1.entry_of_exit en2.entry_of_exit
-  ; exit_of_entry = Addr.Map.merge m en1.exit_of_entry en2.exit_of_entry
-  }
-
 let delimited_by blocks g exit_nodes : Addr.Set.t Addr.Map.t =
   let rec loop
       (pc : Addr.t)
@@ -261,14 +249,6 @@ let delimited_by blocks g exit_nodes : Addr.Set.t Addr.Map.t =
   in
   let _, d = loop g.root Addr.Set.empty Addr.Set.empty Addr.Map.empty in
   d
-
-let merge_delimited_by d1 d2 =
-  let m _ a b =
-    match a, b with
-    | Some x, None | None, Some x -> Some x
-    | _ -> assert false
-  in
-  Addr.Map.merge m d1 d2
 
 let defs_of_exit_scope blocks g exit_nodes : (Flow.def array * Var.t Var.Map.t) Addr.Map.t
     =
@@ -333,14 +313,6 @@ let defs_of_exit_scope blocks g exit_nodes : (Flow.def array * Var.t Var.Map.t) 
   let _, d = loop g.root Addr.Set.empty Addr.Map.empty Addr.Map.empty in
   d
 
-let merge_defs_of_exit_scope d1 d2 =
-  let m _ a b =
-    match a, b with
-    | Some x, None | None, Some x -> Some x
-    | _ -> assert false
-  in
-  Addr.Map.merge m d1 d2
-
 (* FIXME use or remove *)
 (*
 let rec in_this_scope scope_defs v =
@@ -392,12 +364,6 @@ type jump_closures =
   ; allocated_call_blocks : (Var.t, Addr.t) Hashtbl.t
   }
 
-let empty_jump_closures =
-  { closure_of_jump = Addr.Map.empty
-  ; closure_of_alloc_site = Addr.Map.empty
-  ; allocated_call_blocks = Hashtbl.create 3
-  }
-
 let jump_closures (g : graph) dominated_by : jump_closures =
   let idom = immediate_dominator_of_node g dominated_by in
   let closure_of_jump, closure_of_alloc_site =
@@ -434,19 +400,6 @@ let jump_closures (g : graph) dominated_by : jump_closures =
   in
 
   { closure_of_jump; closure_of_alloc_site; allocated_call_blocks = Hashtbl.create 37 }
-
-let merge_jump_closures jc1 jc2 =
-  let m _ a b =
-    match a, b with
-    | Some x, None | None, Some x -> Some x
-    | _ -> assert false
-  in
-  { closure_of_jump = Addr.Map.merge m jc1.closure_of_jump jc2.closure_of_jump
-  ; closure_of_alloc_site =
-      Addr.Map.merge m jc1.closure_of_alloc_site jc2.closure_of_alloc_site
-  ; allocated_call_blocks = (* TODO *)
-                            Hashtbl.create 3
-  }
 
 (******************************************************************************)
 
@@ -894,22 +847,16 @@ let cps_block st block_addr block =
 
   { params = block.params @ [ ks ]; handler = None; body; branch = last }
 
-let cps_blocks st = Addr.Map.mapi (cps_block st) st.blocks
-
 let pr_graph ({ start; blocks; _ } as p) =
   let g = build_graph blocks start in
   if debug () then print_graph blocks g;
   p
 
-let f ({ start; blocks; free_pc } : Code.program) : Code.program =
-  let (jc, en, db, does)
-        : jump_closures
-          * trywith_exit_nodes
-          * Addr.Set.t Addr.Map.t
-          * (Flow.def array * Var.t Var.Map.t) Addr.Map.t =
+let f (p : Code.program) : Code.program =
+  let p =
     Code.fold_closures
-      { start; blocks; free_pc }
-      (fun _ _ (start, _) (jc, en, db, does) ->
+      p
+      (fun _ _ (start, _) ({ blocks; free_pc; _ } as p) ->
         if not @@ debug () then () else Printf.eprintf ">> Start: %d\n\n" start;
         let cfg = build_graph blocks start in
         let dom_by = dominated_by_node cfg in
@@ -1005,24 +952,30 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
               Printf.eprintf "\n")
             closure_does);
 
-        ( merge_jump_closures closure_jc jc
-        , merge_exit_nodes closure_en en
-        , merge_delimited_by closure_db db
-        , merge_defs_of_exit_scope closure_does does ))
-      (empty_jump_closures, empty_exit_nodes, Addr.Map.empty, Addr.Map.empty)
+        let st =
+          { new_blocks = Addr.Map.empty, free_pc
+          ; blocks
+          ; jc = closure_jc
+          ; en = closure_en
+          ; delimited_by = closure_db
+          ; defs_of_exit_node = closure_does
+          ; kx_of_poptrap = Addr.Map.empty
+          }
+        in
+        let blocks =
+          Code.traverse
+            { fold = Code.fold_children }
+            (fun pc blocks ->
+              Addr.Map.add pc (cps_block st pc (Addr.Map.find pc blocks)) blocks)
+            start
+            st.blocks
+            st.blocks
+        in
+        let new_blocks, free_pc = st.new_blocks in
+        let blocks = Addr.Map.fold Addr.Map.add new_blocks blocks in
+        { p with blocks; free_pc })
+      p
   in
-
-  let st =
-    { new_blocks = Addr.Map.empty, free_pc
-    ; blocks
-    ; jc
-    ; en
-    ; delimited_by = db
-    ; defs_of_exit_node = does
-    ; kx_of_poptrap = Addr.Map.empty
-    }
-  in
-  let blocks = cps_blocks st in
 
   if not @@ debug ()
   then ()
@@ -1031,35 +984,26 @@ let f ({ start; blocks; free_pc } : Code.program) : Code.program =
     Var.Set.iter (fun c -> Printf.eprintf " v%d" (Var.idx c)) !cont_closures;
     Printf.eprintf "\n\n%!");
 
-  let new_start =
+  let new_start = p.free_pc in
+  let blocks =
     let main = Var.fresh () in
     let main_arg = Var.fresh () in
     let args = Var.fresh () in
     let res = Var.fresh () in
-    add_block
-      st
+    Addr.Map.add
+      new_start
       { params = []
       ; handler = None
       ; body =
-          [ Let (main, Closure ([ main_arg ], (start, [ main_arg ])))
+          [ Let (main, Closure ([ main_arg ], (p.start, [ main_arg ])))
           ; Let (args, Prim (Extern "%js_array", []))
           ; Let (res, Prim (Extern "caml_callback", [ Pv main; Pv args ]))
           ]
       ; branch = Return res
       }
+      p.blocks
   in
-  let new_blocks, free_pc = st.new_blocks in
-  let blocks =
-    Addr.Map.merge
-      (fun _ b b' ->
-        match b, b' with
-        | None, None -> None
-        | Some b, None | None, Some b -> Some b
-        | _ -> assert false)
-      blocks
-      new_blocks
-  in
-  { start = new_start; blocks; free_pc }
+  { start = new_start; blocks; free_pc = new_start + 1 }
 
 let f p =
   let t = Timer.make () in
