@@ -67,6 +67,7 @@ let output st (s : string) l =
   st.output s 0 l
 
 let rec output_spaces st n =
+  let n = n mod 40 in
   output st spaces (min n 80);
   if n > 80 then output_spaces st (n - 80)
 
