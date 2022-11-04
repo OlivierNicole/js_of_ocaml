@@ -1310,13 +1310,12 @@ and translate_instr ctx expr_queue loc instr =
         mutator_p
         [ J.Expression_statement (J.EBin (J.Eq, Mlvalue.Array.field cx cy, cz)), loc ]
 
-and translate_instrs ctx expr_queue loc instr =
+and translate_instrs ctx expr_queue loc instr acc =
   match instr with
-  | [] -> [], expr_queue
+  | [] -> List.concat (List.rev acc), expr_queue
   | instr :: rem ->
       let st, expr_queue = translate_instr ctx expr_queue loc instr in
-      let instrs, expr_queue = translate_instrs ctx expr_queue loc rem in
-      st @ instrs, expr_queue
+      translate_instrs ctx expr_queue loc rem (st :: acc)
 
 and compile_block st queue (pc : Addr.t) frontier interm =
   if (not (List.is_empty queue))
@@ -1356,7 +1355,7 @@ and compile_block st queue (pc : Addr.t) frontier interm =
     let new_frontier = resolve_nodes interm grey in
     let block = Addr.Map.find pc st.blocks in
     let seq, queue =
-      translate_instrs st.ctx queue (source_location st.ctx pc) block.body
+      translate_instrs st.ctx queue (source_location st.ctx pc) block.body []
     in
     let body =
       seq
