@@ -14,159 +14,66 @@ open Code
 let debug = Debug.find "eff"
 
 type graph =
-  { root : Addr.t
-  ; succs : Addr.Set.t Addr.Map.t
-  ; backs : Addr.Set.t Addr.Map.t
-  ; preds : Addr.Set.t Addr.Map.t
-  ; loops : Addr.Set.t
-  ; handler_succ : Addr.t Addr.Map.t
+  { succs : (Addr.t, Addr.Set.t) Hashtbl.t
+  ; reverse_post_order : Addr.t list
   }
 
-let get_values k map = try Addr.Map.find k map with Not_found -> Addr.Set.empty
-
-let add_value k v map =
-  let vs = get_values k map in
-  Addr.Map.add k (Addr.Set.add v vs) map
-
-let build_graph (blocks : block Addr.Map.t) (pc : Addr.t) : graph =
-  let rec loop (g : graph) (pc : Addr.t) (visited : Addr.Set.t) (anc : Addr.Set.t) =
-    if not (Addr.Set.mem pc visited)
-    then
-      let visited = Addr.Set.add pc visited in
-      let anc = Addr.Set.add pc anc in
-      let s = Code.fold_children blocks pc Addr.Set.add Addr.Set.empty in
-      let s =
+let build_graph blocks pc =
+  let succs = Hashtbl.create 16 in
+  let l = ref [] in
+  let visited = Hashtbl.create 16 in
+  let rec traverse pc =
+    if not (Hashtbl.mem visited pc)
+    then (
+      Hashtbl.add visited pc ();
+      let successors = Code.fold_children blocks pc Addr.Set.add Addr.Set.empty in
+      let successors =
         (* Changed from Generate.build_graph *)
         match (Addr.Map.find pc blocks).branch with
-        | Pushtrap (_, _, (pc', _), _) -> Addr.Set.add pc' s
-        | _ -> s
+        | Pushtrap (_, _, (pc', _), _) -> Addr.Set.add pc' successors
+        | _ -> successors
       in
-
-      let backs = Addr.Set.inter s anc in
-
-      let succs = Addr.Set.filter (fun pc -> not (Addr.Set.mem pc anc)) s in
-      let preds =
-        Addr.Set.fold (fun succ preds -> add_value succ pc preds) succs g.preds
-        |> Addr.Set.fold (fun back preds -> add_value back pc preds) backs
-      in
-      let loops = Addr.Set.fold Addr.Set.add backs g.loops in
-      let handler_succ =
-        match (Addr.Map.find pc blocks).handler with
-        | None -> g.handler_succ
-        | Some (_, (handler_addr, _)) -> Addr.Map.add pc handler_addr g.handler_succ
-      in
-
-      let g =
-        { g with
-          backs = Addr.Map.add pc backs g.backs
-        ; succs = Addr.Map.add pc succs g.succs
-        ; preds
-        ; loops
-        ; handler_succ
-        }
-      in
-      Addr.Set.fold (fun pc' (g, visited) -> loop g pc' visited anc) succs (g, visited)
-    else g, visited
+      Hashtbl.add succs pc successors;
+      Addr.Set.iter traverse successors;
+      l := pc :: !l)
   in
+  traverse pc;
+  { succs; reverse_post_order = !l }
 
-  let g, _ =
-    loop
-      { root = pc
-      ; succs = Addr.Map.empty
-      ; backs = Addr.Map.empty
-      ; preds = Addr.Map.empty
-      ; loops = Addr.Set.empty
-      ; handler_succ = Addr.Map.empty
-      }
-      pc
-      Addr.Set.empty
-      Addr.Set.empty
+let dominator_tree g =
+  (* A Simple, Fast Dominance Algorithm
+     Keith D. Cooper, Timothy J. Harvey, and Ken Kennedy *)
+  let dom = Hashtbl.create 16 in
+  let order = Hashtbl.create 16 in
+  List.iteri (fun i pc -> Hashtbl.add order pc i) g.reverse_post_order;
+  let rec inter pc pc' =
+    (* Compute closest common ancestor *)
+    if pc = pc'
+    then pc
+    else if Hashtbl.find order pc < Hashtbl.find order pc'
+    then inter pc (Hashtbl.find dom pc')
+    else inter (Hashtbl.find dom pc) pc'
   in
-  g
-
-let print_graph blocks (g : graph) =
-  if not @@ debug ()
-  then ()
-  else
-    let is_handler_succ v v' =
-      match (Addr.Map.find v blocks).handler with
-      | None -> false
-      | Some (_, (pc, _)) -> pc = v'
-    in
-
-    Printf.eprintf "digraph G {\n";
-    Addr.Map.iter
-      (fun k s ->
-        Addr.Set.iter
-          (fun v ->
-            if is_handler_succ k v
-            then Printf.eprintf "%d -> %d [style=dashed,color=green];\n" k v
-            else Printf.eprintf "%d -> %d;\n" k v)
-          s)
-      g.succs;
-
-    Addr.Map.iter
-      (fun k s ->
-        Addr.Set.iter
-          (fun v -> Printf.eprintf "%d -> %d [style=dashed,color=red];\n" k v)
-          s)
-      g.backs;
-
-    (* Addr.Map.iter (fun k s -> *)
-    (*   Addr.Set.iter (fun v -> *)
-    (*     Printf.eprintf "%d -> %d [style=dashed,color=blue];\n" k v *)
-    (*   ) s *)
-    (* ) g.preds; *)
-    Printf.eprintf "}\n"
-
-let dominated_by_node (g : graph) : Addr.Set.t Addr.Map.t =
-  let explore_avoiding v =
-    let rec loop node visited =
-      let visited = Addr.Set.add node visited in
-      try
-        let succs = Addr.Set.diff (Addr.Map.find node g.succs) visited in
-        Addr.Set.fold loop succs visited
-      with Not_found -> visited
-    in
-    loop g.root (Addr.Set.singleton v)
-  in
-
-  let all_nodes =
-    Addr.Map.fold (fun v _ s -> Addr.Set.add v s) g.preds (Addr.Set.singleton g.root)
-  in
-
-  Addr.Set.fold
-    (fun v dominated_by ->
-      let not_dominated = explore_avoiding v in
-      Addr.Map.fold
-        (fun v' _ dominated_by ->
-          if not (Addr.Set.mem v' not_dominated)
-          then add_value v v' dominated_by
-          else dominated_by)
-        g.preds
-        dominated_by)
-    all_nodes
-    (Addr.Map.singleton g.root all_nodes)
-
-let immediate_dominator_of_node (g : graph) dominated_by : Addr.t Addr.Map.t =
-  let dom_by node = get_values node dominated_by in
-
-  let rec loop node (idom : Addr.t Addr.Map.t) =
-    let dom = dom_by node |> Addr.Set.remove node in
-    let dom_dom =
-      Addr.Set.fold
-        (fun node' dom_dom ->
-          dom_by node' |> Addr.Set.remove node' |> Addr.Set.union dom_dom)
-        dom
-        Addr.Set.empty
-    in
-    let idom_node = Addr.Set.diff dom dom_dom in
-    let idom =
-      Addr.Set.fold (fun node' idom -> Addr.Map.add node' node idom) idom_node idom
-    in
-    Addr.Set.fold loop idom_node idom
-  in
-  loop g.root Addr.Map.empty
+  List.iter
+    (fun pc ->
+      let l = Hashtbl.find g.succs pc in
+      Addr.Set.iter
+        (fun pc' ->
+          let d = try inter pc (Hashtbl.find dom pc') with Not_found -> pc in
+          Hashtbl.replace dom pc' d)
+        l)
+    g.reverse_post_order;
+  (* Check we have reached a fixed point (reducible graph) *)
+  List.iter
+    (fun pc ->
+      let l = Hashtbl.find g.succs pc in
+      Addr.Set.iter
+        (fun pc' ->
+          let d = Hashtbl.find dom pc' in
+          assert (inter pc d = d))
+        l)
+    g.reverse_post_order;
+  dom
 
 type jump_closures =
   { closure_of_jump : Var.t Addr.Map.t
@@ -174,13 +81,11 @@ type jump_closures =
   ; allocated_call_blocks : (Var.t, Addr.t) Hashtbl.t
   }
 
-let jump_closures (g : graph) dominated_by : jump_closures =
-  let idom = immediate_dominator_of_node g dominated_by in
+let jump_closures idom : jump_closures =
   let closure_of_jump, closure_of_alloc_site =
-    Addr.Map.fold
-      (fun node _preds (c_o_j, c_o_a_s) ->
+    Hashtbl.fold
+      (fun node idom_node (c_o_j, c_o_a_s) ->
         let cname = Var.fresh () in
-        let idom_node = Addr.Map.find node idom in
         let closures_to_allocate =
           try Addr.Map.find idom_node c_o_a_s with Not_found -> []
         in
@@ -189,7 +94,7 @@ let jump_closures (g : graph) dominated_by : jump_closures =
           Addr.Map.add idom_node ((cname, node) :: closures_to_allocate) c_o_a_s
         in
         c_o_j, c_o_a_s)
-      g.preds
+      idom
       (Addr.Map.empty, Addr.Map.empty)
   in
 
@@ -604,42 +509,25 @@ let cps_block st block_addr block =
 
   { params = block.params @ [ ks ]; handler = None; body; branch = last }
 
-let pr_graph ({ start; blocks; _ } as p) =
-  let g = build_graph blocks start in
-  if debug () then print_graph blocks g;
-  p
-
 let f (p : Code.program) : Code.program =
   let p =
     Code.fold_closures
       p
       (fun _ _ (start, _) ({ blocks; free_pc; _ } as p) ->
         if not @@ debug () then () else Printf.eprintf ">> Start: %d\n\n" start;
-        let cfg = build_graph blocks start in
-        let dom_by = dominated_by_node cfg in
 
-        if not @@ debug ()
-        then ()
-        else (
-          Printf.eprintf "dominated_by: \n";
-          Addr.Map.iter
-            (fun node dom ->
-              Printf.eprintf "%d ->" node;
-              Addr.Set.iter (fun node' -> Printf.eprintf " %d" node') dom;
-              Printf.eprintf "\n")
-            dom_by;
-          Printf.eprintf "\n";
-          if debug () then print_graph blocks cfg;
-          Printf.eprintf "%!");
+        let idom =
+          let cfg = build_graph blocks start in
+          dominator_tree cfg
+        in
 
-        let closure_jc = jump_closures cfg dom_by in
+        let closure_jc = jump_closures idom in
 
         if debug ()
         then (
           Printf.eprintf "\nidom:\n";
 
-          let idom = immediate_dominator_of_node cfg dom_by in
-          Addr.Map.iter (fun node dom -> Printf.eprintf "%d -> %d\n" node dom) idom;
+          Hashtbl.iter (fun node dom -> Printf.eprintf "%d -> %d\n" node dom) idom;
 
           Printf.eprintf "\nClosure of alloc site:\n";
           Addr.Map.iter
