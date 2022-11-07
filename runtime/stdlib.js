@@ -18,6 +18,35 @@
 // Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
 //Provides: caml_call_gen (const, shallow)
+//If: !effects
+//Weakdef
+function caml_call_gen(f, args) {
+  if(f.fun)
+    return caml_call_gen(f.fun, args);
+  //FIXME, can happen with too many arguments
+  if(typeof f !== "function") return f;
+  var n = f.length | 0;
+  if(n === 0) return f.apply(null,args);
+  var argsLen = args.length | 0;
+  var d = n - argsLen | 0;
+  if (d == 0)
+    return f.apply(null, args);
+  else if (d < 0) {
+    return caml_call_gen(f.apply(null,args.slice(0,n)),args.slice(n));
+  }
+  else {
+    return function (){
+      var extra_args = (arguments.length == 0)?1:arguments.length;
+      var nargs = new Array(args.length+extra_args);
+      for(var i = 0; i < args.length; i++ ) nargs[i] = args[i];
+      for(var i = 0; i < arguments.length; i++ ) nargs[args.length+i] = arguments[i];
+      return caml_call_gen(f, nargs)
+    }
+  }
+}
+
+//Provides: caml_call_gen (const, shallow)
+//If: effects
 //Weakdef
 function caml_call_gen(f, args) {
   if (f.fun)

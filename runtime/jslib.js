@@ -55,6 +55,12 @@ function caml_trampoline_return(f,args) {
 var caml_stack_depth = 0;
 
 //Provides: caml_callback
+//If: !effects
+//Requires:caml_call_gen
+var caml_callback = caml_call_gen;
+
+//Provides: caml_callback
+//If: effects
 //Requires:caml_stack_depth, caml_call_gen, caml_exn_stack,caml_wrap_exception,caml_fatal_unhandled_effect
 function caml_callback(f,args) {
     var k = function (x,k){return x;};
