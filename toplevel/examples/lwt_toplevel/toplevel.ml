@@ -277,9 +277,9 @@ let setup_js_preview () =
   let ph = by_id "last-js" in
   let runcode : string -> 'a = Js.Unsafe.global##.toplevelEval in
   Js.Unsafe.global##.toplevelEval
-  := fun bc ->
+  := Js.Unsafe.callback_with_arity 1 @@ fun bc ->
   ph##.innerHTML := Js.string bc;
-  runcode bc
+  Js.Unsafe.fun_call runcode [|Js.Unsafe.inject bc|]
 
 let current_position = ref 0
 

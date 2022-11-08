@@ -75,17 +75,19 @@ let setup =
        let res : unit -> _ = Js.Unsafe.global##toplevelEval (res : string) in
        res
      in
-     Js.Unsafe.global##.toplevelCompile := compile (*XXX HACK!*);
+     Js.Unsafe.global##.toplevelCompile
+     := Js.Unsafe.callback_with_arity 1 compile (*XXX HACK!*);
      (Js.Unsafe.global##.toplevelEval
-     := fun (x : string) ->
-     let f : < .. > Js.t -> < .. > Js.t = Js.Unsafe.eval_string x in
-     fun () ->
-       let res = f Js.Unsafe.global in
-       Format.(pp_print_flush std_formatter ());
-       Format.(pp_print_flush err_formatter ());
-       flush stdout;
-       flush stderr;
-       res);
+     := Js.Unsafe.callback_with_arity 1
+        @@ fun (x : string) ->
+        let f : < .. > Js.t -> < .. > Js.t = Js.Unsafe.eval_string x in
+        fun () ->
+          let res = f Js.Unsafe.global in
+          Format.(pp_print_flush std_formatter ());
+          Format.(pp_print_flush err_formatter ());
+          flush stdout;
+          flush stderr;
+          res);
      Js.Unsafe.global##.toplevelReloc
      := Js.Unsafe.callback_with_arity 1 (fun name ->
             let name = Js.to_string name in
