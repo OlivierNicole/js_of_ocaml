@@ -60,12 +60,6 @@ let specialize_js_once p =
   Specialize_js.f_once p
 
 let specialize' (p, info) =
-  (*
-  (* FIXME currently specialize' is broken with CPS. Fix it *)
-  if Config.Flag.effects ()
-  then p, info
-  else
-*)
   let p = specialize_1 (p, info) in
   let p = specialize_js (p, info) in
   p, info
@@ -90,7 +84,7 @@ let effects p =
   if Config.Flag.effects ()
   then (
     if debug () then Format.eprintf "Effects...@.";
-    Effects.f p |> inline |> deadcode |> phi |> flow |> specialize |> Trampoline.f)
+    Effects.f p |> inline |> deadcode |> phi |> flow |> fst |> Trampoline.f)
   else p
 
 let print p =
