@@ -15,11 +15,13 @@ let debug = Debug.find "eff"
 
 type graph =
   { succs : (Addr.t, Addr.Set.t) Hashtbl.t
+  ; exn_handlers : (Addr.t, unit) Hashtbl.t
   ; reverse_post_order : Addr.t list
   }
 
 let build_graph blocks pc =
   let succs = Hashtbl.create 16 in
+  let exn_handlers = Hashtbl.create 16 in
   let l = ref [] in
   let visited = Hashtbl.create 16 in
   let rec traverse pc =
@@ -30,7 +32,9 @@ let build_graph blocks pc =
       let successors =
         (* Changed from Generate.build_graph *)
         match (Addr.Map.find pc blocks).branch with
-        | Pushtrap (_, _, (pc', _), _) -> Addr.Set.add pc' successors
+        | Pushtrap (_, _, (pc', _), _) ->
+            Hashtbl.add exn_handlers pc' ();
+            Addr.Set.add pc' successors
         | _ -> successors
       in
       Hashtbl.add succs pc successors;
@@ -38,7 +42,7 @@ let build_graph blocks pc =
       l := pc :: !l)
   in
   traverse pc;
-  { succs; reverse_post_order = !l }
+  { succs; exn_handlers; reverse_post_order = !l }
 
 let dominator_tree g =
   (* A Simple, Fast Dominance Algorithm
@@ -81,19 +85,22 @@ type jump_closures =
   ; allocated_call_blocks : (Var.t, Addr.t) Hashtbl.t
   }
 
-let jump_closures idom : jump_closures =
+let jump_closures g idom : jump_closures =
   let closure_of_jump, closure_of_alloc_site =
     Hashtbl.fold
       (fun node idom_node (c_o_j, c_o_a_s) ->
-        let cname = Var.fresh () in
-        let closures_to_allocate =
-          try Addr.Map.find idom_node c_o_a_s with Not_found -> []
-        in
-        let c_o_j = Addr.Map.add node cname c_o_j in
-        let c_o_a_s =
-          Addr.Map.add idom_node ((cname, node) :: closures_to_allocate) c_o_a_s
-        in
-        c_o_j, c_o_a_s)
+        if Hashtbl.mem g.exn_handlers node
+        then c_o_j, c_o_a_s
+        else
+          let cname = Var.fresh () in
+          let closures_to_allocate =
+            try Addr.Map.find idom_node c_o_a_s with Not_found -> []
+          in
+          let c_o_j = Addr.Map.add node cname c_o_j in
+          let c_o_a_s =
+            Addr.Map.add idom_node ((cname, node) :: closures_to_allocate) c_o_a_s
+          in
+          c_o_j, c_o_a_s)
       idom
       (Addr.Map.empty, Addr.Map.empty)
   in
@@ -516,12 +523,10 @@ let f (p : Code.program) : Code.program =
       (fun _ _ (start, _) ({ blocks; free_pc; _ } as p) ->
         if not @@ debug () then () else Printf.eprintf ">> Start: %d\n\n" start;
 
-        let idom =
-          let cfg = build_graph blocks start in
-          dominator_tree cfg
-        in
+        let cfg = build_graph blocks start in
+        let idom = dominator_tree cfg in
 
-        let closure_jc = jump_closures idom in
+        let closure_jc = jump_closures cfg idom in
 
         if debug ()
         then (
