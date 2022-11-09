@@ -16,7 +16,7 @@ function f (params) {body} -->
 *)
 open Code
 
-let threshold = 2
+let threshold = 50
 
 let collect_free_vars program var_depth depth pc =
   let vars = ref Var.Set.empty in
@@ -113,7 +113,7 @@ let rec traverse var_depth program pc depth limit =
             let rem', program, functions =
               rewrite_body false (program, functions' @ functions) rem
             in
-            if depth = 0 && functions <> []
+            if depth = 0 && functions' <> []
             then (
               prerr_endline "-----";
               List.iter
@@ -121,10 +121,10 @@ let rec traverse var_depth program pc depth limit =
                   match i with
                   | Let (x, _) -> Format.eprintf "ADDED (%d) v%d@." pc' (Code.Var.idx x)
                   | _ -> ())
-                functions);
+                functions');
             if depth = 0
-            then functions @ (i :: rem), program, []
-            else i :: rem', program, functions @ functions'
+            then functions' @ (i :: rem), program, []
+            else i :: rem', program, functions
         | i :: rem ->
             let rem', program, functions = rewrite_body true (program, functions) rem in
             i :: rem', program, functions
