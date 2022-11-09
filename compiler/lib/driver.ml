@@ -90,6 +90,9 @@ let effects p =
     |> phi
     |> flow
     |> fst
+    |> (fun p ->
+         Code.Print.program (fun _ _ -> "") p;
+         p)
     |> Lambda_lifting.f
     |> Trampoline.f)
   else p
