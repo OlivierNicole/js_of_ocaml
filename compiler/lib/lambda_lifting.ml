@@ -1,9 +1,10 @@
 (*
 - clean-up
 - timer
-- baseline is not 0
 *)
 open Code
+
+let baseline = 1
 
 let threshold = 50
 
@@ -102,7 +103,7 @@ let rec traverse var_depth program pc depth limit =
             let rem', program, functions =
               rewrite_body false (program, functions' @ functions) rem
             in
-            if depth = 0 && functions' <> []
+            if depth = baseline && functions' <> []
             then (
               prerr_endline "-----";
               List.iter
@@ -111,7 +112,7 @@ let rec traverse var_depth program pc depth limit =
                   | Let (x, _) -> Format.eprintf "ADDED (%d) v%d@." pc' (Code.Var.idx x)
                   | _ -> ())
                 functions');
-            if depth = 0
+            if depth = baseline
             then functions' @ (i :: rem), program, []
             else i :: rem', program, functions
         | i :: rem ->
@@ -129,7 +130,9 @@ let rec traverse var_depth program pc depth limit =
 let f program =
   let nv = Var.count () in
   let var_depth = Array.make nv (-1) in
-  let program, functions = traverse var_depth program program.start 0 threshold in
+  let program, functions =
+    traverse var_depth program program.start 0 (baseline + threshold)
+  in
   assert (functions = []);
   prerr_endline "AAAAAAAAAAAAAAA";
   Code.Print.program (fun _ _ -> "") program;
