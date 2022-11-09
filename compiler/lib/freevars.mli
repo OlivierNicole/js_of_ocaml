@@ -19,4 +19,8 @@
  *)
 open! Stdlib
 
+val iter_block_free_vars : (Code.Var.t -> unit) -> Code.block -> unit
+
+val iter_block_bound_vars : (Code.Var.t -> unit) -> Code.block -> unit
+
 val f : Code.program -> Code.Var.Set.t Code.Addr.Map.t
