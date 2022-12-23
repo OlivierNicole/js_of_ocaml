@@ -132,6 +132,7 @@ type st =
   ; blocks : Code.block Addr.Map.t
   ; jc : jump_closures
   ; closure_continuation : Addr.t -> Var.t
+  ; mutable cps_pc_of_direct : Addr.t -> Addr.t
   }
 
 let add_block st block =
@@ -199,21 +200,27 @@ let cps_last ~st (last : last) ~k : instr list * last =
         ]
       , Return ret )
 
-let cps_instr ~st (instr : instr) : instr =
+let cps_instr ~st (instr : instr) : instr list =
   match instr with
-  | Let (x, Closure (params, (pc, args))) ->
-      Let (x, Closure (params @ [ st.closure_continuation pc ], (pc, args)))
+  | Let (c, Closure (params, (pc, args))) ->
+      (* Also add CPS closure (this one becomes direct style) and create a pair *)
+      let direct_c = Var.fresh () in
+      let cps_c = Var.fresh () in
+      let cps_pc = st.cps_pc_of_direct pc in
+      [ Let (cps_c, Closure (params @ [ st.closure_continuation pc ], (cps_pc, args)))
+      ; Let (direct_c, Closure (params, (pc, args)))
+      ; Let (c, Block (0, [| direct_c; cps_c |], NotArray)) ]
   | Let (x, Prim (Extern "caml_alloc_dummy_function", [ size; arity ])) -> (
       match arity with
       | Pc (Int a) ->
-          Let
-            ( x
-            , Prim (Extern "caml_alloc_dummy_function", [ size; Pc (Int (Int32.succ a)) ])
-            )
+          [ Let
+              ( x
+              , Prim (Extern "caml_alloc_dummy_function", [ size; Pc (Int (Int32.succ a)) ])
+              ) ]
       | _ -> assert false)
   | Let (_, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) ->
       assert false
-  | _ -> instr
+  | _ -> [ instr ]
 
 let cps_block ~st ~k pc block =
   let alloc_jump_closures =
@@ -229,7 +236,10 @@ let cps_block ~st ~k pc block =
   let rewrite_instr e =
     match e with
     | Apply { f; args; exact } ->
-        Some (fun ~x ~k -> [ Let (x, Apply { f; args = args @ [ k ]; exact }) ])
+        Some (fun ~x ~k ->
+          let f_cps = Var.fresh () in
+          [ Let (f_cps, Field (f, 1))
+          ; Let (x, Apply { f = f_cps; args = args @ [ k ]; exact }) ])
     | Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ]) ->
         Some
           (fun ~x ~k ->
@@ -287,11 +297,12 @@ let cps_block ~st ~k pc block =
   let body, last =
     match rewritten_block with
     | Some (body_prefix, last_instrs, last) ->
-        List.map body_prefix ~f:(fun i -> cps_instr ~st i) @ last_instrs, last
+        List.concat (List.map body_prefix ~f:(fun i -> cps_instr ~st i))
+        @ last_instrs, last
     | None ->
         let last_instrs, last = cps_last ~st block.branch ~k in
         let body =
-          List.map block.body ~f:(fun i -> cps_instr ~st i)
+          List.concat (List.map block.body ~f:(fun i -> cps_instr ~st i))
           @ alloc_jump_closures
           @ last_instrs
         in
@@ -345,6 +356,11 @@ let split_blocks (p : Code.program) =
   in
   Addr.Map.fold split_block p.blocks p
 
+(* Modify all function applications to take into account the fact that closure
+   are turned into (direct style closure, CPS closure) pairs. *)
+let rewrite_direct ~st ~pc block =
+  assert false
+
 let f (p : Code.program) =
   let p = split_blocks p in
   let closure_continuation =
@@ -358,6 +374,16 @@ let f (p : Code.program) =
         Hashtbl.add tbl pc k;
         k
   in
+  let cps_pc_of_direct =
+    (* Provide the address of the CPS translation of a block *)
+    let tbl = Hashtbl.create 4 in
+    fun ~st pc ->
+      try Hashtbl.find tbl pc
+      with Not_found ->
+        let new_blocks, free_pc = st.new_blocks in
+        st.new_blocks <- new_blocks, free_pc + 1;
+        free_pc
+  in
   let p =
     Code.fold_closures
       p
@@ -365,19 +391,31 @@ let f (p : Code.program) =
         let cfg = build_graph blocks start in
         let idom = dominator_tree cfg in
         let closure_jc = jump_closures cfg idom in
-        let st =
+        let rec st =
           { new_blocks = Addr.Map.empty, free_pc
           ; blocks
           ; jc = closure_jc
           ; closure_continuation
+          ; cps_pc_of_direct = fun pc -> cps_pc_of_direct ~st pc
           }
         in
         let k = closure_continuation start in
+        (* For every block in the closure,
+           1. add its CPS translation to the block map at a fresh address
+           2. keep the direct-style block but modify all function applications
+              to take into account the fact that closure are turned into
+              (direct style closure, CPS closure) pairs. *)
         let blocks =
           Code.traverse
             { fold = Code.fold_children }
             (fun pc blocks ->
-              Addr.Map.add pc (cps_block ~st ~k pc (Addr.Map.find pc blocks)) blocks)
+              Addr.Map.add
+                (st.cps_pc_of_direct pc)
+                (cps_block ~st ~k pc (* FIXME cps_pc? *) (Addr.Map.find pc blocks))
+              @@ Addr.Map.add
+                   pc
+                   (rewrite_direct ~st ~pc (Addr.Map.find pc blocks))
+                   blocks)
             start
             st.blocks
             st.blocks
