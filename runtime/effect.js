@@ -135,7 +135,7 @@ function caml_alloc_stack(hv, hx, hf) {
     var k=caml_pop_fiber();
     return caml_call_gen(f, [e, k]);
   }
-  return [0, hval, [0, hexn, 0], [0, hv, hx, hf], 0];
+  return [0, hval, [0, hexn, 0], [0, hv[2], hx[2], hf[2]], 0];
 }
 
 //Provides: caml_alloc_stack

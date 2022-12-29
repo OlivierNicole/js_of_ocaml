@@ -132,7 +132,8 @@ type st =
   ; blocks : Code.block Addr.Map.t
   ; jc : jump_closures
   ; closure_continuation : Addr.t -> Var.t
-  ; mutable cps_pc_of_direct : Addr.t -> Addr.t
+  ; cps_pc_of_direct : Addr.t -> Addr.t
+  ; ident_fn : Var.t
   }
 
 let add_block st block =
@@ -356,10 +357,47 @@ let split_blocks (p : Code.program) =
   in
   Addr.Map.fold split_block p.blocks p
 
-(* Modify all function applications to take into account the fact that closure
-   are turned into (direct style closure, CPS closure) pairs. *)
-let rewrite_direct ~st ~pc block =
-  assert false
+(* Modify all function applications and closure creations to take into account
+   the fact that closure are turned into (direct style closure, CPS closure)
+   pairs. Also rewrite the effect primitives to switch to the CPS versions of
+   functions (for resume) or fail (for perform). *)
+let rewrite_direct_block ~st block =
+  let rewrite_instr = function
+    | Let (x, Apply { f; args; exact }) ->
+        let f_direct = Var.fresh () in
+        [ Let (f_direct, Field (f, 0))
+        ; Let (x, Apply { f = f_direct; args; exact }) ]
+    | Let (x, Closure (params, (pc, args))) ->
+        let direct_c = Var.fresh () in
+        let cps_c = Var.fresh () in
+        let cps_pc = st.cps_pc_of_direct pc in
+        [ Let (direct_c, Closure (params, (pc, args)))
+        ; Let ( cps_c, Closure (params @ [ st.closure_continuation pc ]
+              , (cps_pc, args)) )
+        ; Let (x, Block (0, [| direct_c; cps_c |], NotArray)) ]
+    | Let (x, Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ])) ->
+        (* Pass the identity as a continuation and call the CPS version of [f] *)
+        let k = Var.fresh () in
+        let f_cps = Var.fresh () in
+        [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv st.ident_fn ]))
+        ; Let (f_cps, Field (f, 2))
+        ; Let (x, Apply { f = f_cps; args = [ arg; k ]; exact = false })
+        ]
+    | Let (x, Prim (Extern "%perform", [ Pv effect ])) ->
+        (* Perform the effect, which should call the "Unhandled effect"
+           handler. *)
+        let k = Int 0l in (* Will not be used *)
+        [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pc (Int 0l); Pc k ]))
+        ]
+    | Let (x, Prim (Extern "%reperform", [ Pv effect; Pv continuation ])) ->
+        (* Similar to previous case *)
+        let k = Int 0l in (* Will not be used *)
+        [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ]))
+        ]
+    | (Let _ | Assign _ | Set_field _ | Offset_ref _ | Array_set _) as instr ->
+        [ instr ]
+  in
+  { block with body = List.concat_map ~f:rewrite_instr block.body }
 
 let f (p : Code.program) =
   let p = split_blocks p in
@@ -384,6 +422,20 @@ let f (p : Code.program) =
         st.new_blocks <- new_blocks, free_pc + 1;
         free_pc
   in
+  (* Define an identity function as we need it for the "resume" boilerplate. *)
+  let ident_fn = Var.fresh () in
+  let id_pc = p.free_pc in
+  let blocks =
+    let id_arg = Var.fresh () in
+    Addr.Map.add
+      p.free_pc
+      { params = [ id_arg ]
+      ; body = []
+      ; branch = Return id_arg
+      }
+      p.blocks
+  in
+  let p = { start = p.start; blocks; free_pc = p.free_pc + 1 } in
   let p =
     Code.fold_closures
       p
@@ -396,6 +448,7 @@ let f (p : Code.program) =
           ; blocks
           ; jc = closure_jc
           ; closure_continuation
+          ; ident_fn
           ; cps_pc_of_direct = fun pc -> cps_pc_of_direct ~st pc
           }
         in
@@ -414,7 +467,7 @@ let f (p : Code.program) =
                 (cps_block ~st ~k pc (* FIXME cps_pc? *) (Addr.Map.find pc blocks))
               @@ Addr.Map.add
                    pc
-                   (rewrite_direct ~st ~pc (Addr.Map.find pc blocks))
+                   (rewrite_direct_block ~st (Addr.Map.find pc blocks))
                    blocks)
             start
             st.blocks
@@ -429,6 +482,7 @@ let f (p : Code.program) =
   (* Call [caml_callback] to set up the execution context. *)
   let new_start = p.free_pc in
   let blocks =
+    let id_arg = Var.fresh () in
     let main = Var.fresh () in
     let args = Var.fresh () in
     let res = Var.fresh () in
@@ -436,7 +490,8 @@ let f (p : Code.program) =
       new_start
       { params = []
       ; body =
-          [ Let (main, Closure ([ closure_continuation p.start ], (p.start, [])))
+          [ Let (ident_fn, Closure ([ id_arg ], (id_pc, [ id_arg ])))
+          ; Let (main, Closure ([ closure_continuation p.start ], (p.start, [])))
           ; Let (args, Prim (Extern "%js_array", []))
           ; Let (res, Prim (Extern "caml_callback", [ Pv main; Pv args ]))
           ]
