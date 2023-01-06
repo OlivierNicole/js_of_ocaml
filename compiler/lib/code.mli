@@ -237,6 +237,9 @@ val fold_closures :
 val fold_closures_depth :
   program -> (depth:int -> Var.t option -> Var.t list -> cont -> 'd -> 'd) -> 'd -> 'd
 
+val fold_closures_innermost_first :
+  program -> (Var.t option -> Var.t list -> cont -> 'd -> 'd) -> 'd -> 'd
+
 val fold_children : 'c fold_blocs
 
 val traverse :
