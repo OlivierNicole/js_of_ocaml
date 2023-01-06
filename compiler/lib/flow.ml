@@ -54,7 +54,7 @@ let is_undefined d =
 
 let add_expr_def defs x e =
   let idx = Var.idx x in
-  assert (is_undefined defs.(idx));
+  assert (Printf.eprintf "add_expr_def idx = %d\n%!" idx; is_undefined defs.(idx));
   defs.(idx) <- Expr e
 
 let add_assign_def vars defs x y =

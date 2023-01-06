@@ -66,6 +66,7 @@ and block blocks pc pure visited funs =
       let visited, funs =
         match i with
         | Let (x, Closure (_, (pc, _))) ->
+            Printf.eprintf "Closure of pc %d\n%!" pc;
             let pure, visited, funs = traverse blocks pc visited funs in
             visited, if pure then Var.Set.add x funs else funs
         | _ -> visited, funs

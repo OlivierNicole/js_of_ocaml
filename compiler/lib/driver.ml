@@ -83,16 +83,16 @@ let phi p =
   if debug () then Format.eprintf "Variable passing simplification...@.";
   Phisimpl.f p
 
+let print p =
+  if debug () then Code.Print.program (fun _ _ -> "") p;
+  p
+
 let effects p =
   if Config.Flag.effects ()
   then (
     if debug () then Format.eprintf "Effects...@.";
-    Effects.f p |> inline |> deadcode |> phi |> flow |> fst |> Lambda_lifting.f)
+    print p |> Effects.f |> print |> inline |> deadcode |> phi |> flow |> fst |> Lambda_lifting.f)
   else p
-
-let print p =
-  if debug () then Code.Print.program (fun _ _ -> "") p;
-  p
 
 let ( +> ) f g x = g (f x)
 
