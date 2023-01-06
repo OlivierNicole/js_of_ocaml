@@ -128,6 +128,8 @@ let jump_closures g idom : jump_closures =
     idom
     { closure_of_jump = Addr.Map.empty; closures_of_alloc_site = Addr.Map.empty }
 
+type cps_calls = Var.Set.t
+
 type st =
   { mutable new_blocks : Code.block Addr.Map.t * Code.Addr.t
   ; blocks : Code.block Addr.Map.t
@@ -135,6 +137,7 @@ type st =
   ; closure_continuation : Addr.t -> Var.t
   ; cps_pc_of_direct : Addr.t -> Addr.t
   ; ident_fn : Var.t
+  ; cps_calls : cps_calls ref
   }
 
 let add_block st block =
@@ -153,11 +156,12 @@ let allocate_closure ~st ~params ~body ~branch =
   let name = Var.fresh () in
   [ Let (name, Closure (params, (pc, []))) ], name
 
-let tail_call ?(instrs = []) ~exact ~f args =
+let tail_call ~st ?(instrs = []) ~exact ~f args =
   let ret = Var.fresh () in
+  st.cps_calls := Var.Set.add ret !(st.cps_calls);
   instrs @ [ Let (ret, Apply { f; args; exact }) ], Return ret
 
-let cps_branch ~st (pc, args) = tail_call ~exact:true ~f:(closure_of_pc ~st pc) args
+let cps_branch ~st (pc, args) = tail_call ~st ~exact:true ~f:(closure_of_pc ~st pc) args
 
 let cps_jump_cont ~st cont =
   let call_block =
@@ -168,10 +172,11 @@ let cps_jump_cont ~st cont =
 
 let cps_last ~st (last : last) ~k : instr list * last =
   match last with
-  | Return x -> tail_call ~exact:true ~f:k [ x ]
+  | Return x -> tail_call ~st ~exact:true ~f:k [ x ]
   | Raise (x, _) ->
       let exn_handler = Var.fresh_n "raise" in
       tail_call
+        ~st
         ~instrs:[ Let (exn_handler, Prim (Extern "caml_pop_trap", [])) ]
         ~exact:true
         ~f:exn_handler
@@ -265,6 +270,7 @@ let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
         Some (fun ~k ->
           let f_cps = Var.fresh () in
           tail_call
+            ~st
             ~instrs:[ Let (f_cps, Field (f, 1)) ]
             ~exact ~f:f_cps (args @ [ k ]))
     | Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ]) ->
@@ -272,6 +278,7 @@ let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
           (fun ~k ->
             let k' = Var.fresh_n "cont" in
             tail_call
+              ~st
               ~instrs:[ Let (k', Prim (Extern "caml_resume_stack", [ Pv stack; Pv k ])) ]
               ~exact:false
               ~f
@@ -321,7 +328,7 @@ let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
             let pc, args = cont in
             let f' = closure_of_pc ~st pc in
             let body, branch =
-              tail_call ~instrs:alloc_jump_closures ~exact:true ~f:f' args
+              tail_call ~st ~instrs:alloc_jump_closures ~exact:true ~f:f' args
             in
             allocate_closure ~st ~params:[ x ] ~body ~branch
           in
@@ -580,6 +587,7 @@ let f (p : Code.program) =
     in
     p.free_pc, { start = p.start; blocks; free_pc = p.free_pc + 1 }
   in
+  let cps_calls = ref Var.Set.empty in
   let p, cps_blocks, direct_subst, _cps_subst =
     Code.fold_closures_depth
       p
@@ -601,6 +609,7 @@ let f (p : Code.program) =
             ; closure_continuation
             ; ident_fn
             ; cps_pc_of_direct = fun pc -> cps_pc_of_direct ~st pc
+            ; cps_calls
             }
           in
           let blocks, direct_subst =
@@ -802,7 +811,7 @@ let f (p : Code.program) =
       }
       p.blocks
   in
-  { start = new_start; blocks; free_pc = new_start + 1 }
+  { start = new_start; blocks; free_pc = new_start + 1 }, !cps_calls
 
 let f p =
   let t = Timer.make () in

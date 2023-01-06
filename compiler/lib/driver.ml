@@ -87,15 +87,17 @@ let print p =
   if debug () then Code.Print.program (fun _ _ -> "") p;
   p
 
+let ( +> ) f g x = g (f x)
+
+let map_fst f (x, y) = f x, y
+
 let effects p =
   if Config.Flag.effects ()
   then (
     if debug () then Format.eprintf "Effects...@.";
-    print p |> Effects.f |> print (*|> inline |> deadcode |> phi |> flow |> fst (*|> Lambda_lifting.f*)*)
+    print p |> Effects.f |> map_fst print (*|> inline |> deadcode |> phi |> flow |> fst (*|> Lambda_lifting.f*)*)
   )
-  else p
-
-let ( +> ) f g x = g (f x)
+  else p, Code.Var.Set.empty
 
 let rec loop max name round i (p : 'a) : 'a =
   let p' = round p in
@@ -155,10 +157,10 @@ let round2 = flow +> specialize' +> eval +> deadcode +> o1
 
 let o3 = loop 10 "tailcall+inline" round1 1 +> loop 10 "flow" round2 1 +> print
 
-let generate d ~exported_runtime ~wrap_with_fun (p, live_vars) =
+let generate d ~exported_runtime ~wrap_with_fun ((p, live_vars), cps_calls) =
   if times () then Format.eprintf "Start Generation...@.";
   let should_export = should_export wrap_with_fun in
-  Generate.f p ~exported_runtime ~live_vars ~should_export d
+  Generate.f p ~exported_runtime ~live_vars ~cps_calls ~should_export d
 
 let header formatter ~custom_header =
   match custom_header with
@@ -530,8 +532,7 @@ let full
     +> specialize_js_once
     +> profile
     +> effects
-    +> Generate_closure.f
-    +> deadcode'
+    +> map_fst (Generate_closure.f +> deadcode')
   in
   let emit =
     generate d ~exported_runtime ~wrap_with_fun
