@@ -91,7 +91,9 @@ let effects p =
   if Config.Flag.effects ()
   then (
     if debug () then Format.eprintf "Effects...@.";
-    print p |> Effects.f |> print |> inline |> deadcode |> phi |> flow |> fst |> Lambda_lifting.f)
+    (*print p |> Effects.f |> print |> inline |> deadcode |> phi |> flow |> fst |> Lambda_lifting.f*)
+    Lambda_lifting_simple.f p
+  )
   else p
 
 let ( +> ) f g x = g (f x)
@@ -534,8 +536,10 @@ let full
   in
   let emit =
     generate d ~exported_runtime ~wrap_with_fun
+    (*+> (fun p -> Format.printf "before link: "; Js_output.program (Pretty_print.to_out_channel stdout) p; p)*)
     +> link ~standalone ~linkall
     +> pack ~wrap_with_fun ~standalone
+    (*+> (fun p -> Format.printf "before coloring: "; Js_output.program (Pretty_print.to_out_channel stdout) p; p)*)
     +> coloring
     +> check_js
     +> output formatter build_info ~standalone ~custom_header ~source_map ()

@@ -140,6 +140,7 @@ type st =
 let add_block st block =
   let blocks, free_pc = st.new_blocks in
   st.new_blocks <- Addr.Map.add free_pc block blocks, free_pc + 1;
+  Printf.eprintf "add_block returns %d\n%!" free_pc;
   free_pc
 
 let closure_of_pc ~st pc =
@@ -187,7 +188,9 @@ let cps_last ~st (last : last) ~k : instr list * last =
   | Pushtrap ((pc, args), x, handler_cont, _) ->
       let constr_handler, exn_handler =
         (* Construct handler closure *)
-        allocate_closure ~st ~params:[ x ] ~body:[] ~branch:(Branch handler_cont)
+        let handler_pc, handler_args = handler_cont in
+        let handler_cps_cont = st.cps_pc_of_direct handler_pc, handler_args in
+        allocate_closure ~st ~params:[ x ] ~body:[] ~branch:(Branch handler_cps_cont)
       in
       let ret = Var.fresh () in
       ( constr_handler
@@ -403,6 +406,42 @@ let rewrite_direct_block ~st block =
   in
   { block with body = List.concat_map ~f:rewrite_instr block.body }
 
+(* Substitute all bound variables with fresh ones, in a subset of program blocks. *)
+let subst_bound_with_fresh ~block_subset p =
+  let bound =
+    Addr.Map.fold
+      (fun _ block bound ->
+        Var.Set.union bound (Freevars.block_bound_vars ~closure_params:true block))
+      p.Code.blocks
+      Var.Set.empty
+  in
+  let s =
+    let tbl = Hashtbl.create (Var.count ()) in
+    fun v ->
+      try Hashtbl.find tbl (Var.idx v)
+      with Not_found ->
+        let new_ = if Var.Set.mem v bound then Var.fresh () else v in
+        Hashtbl.add tbl (Var.idx v) new_;
+        new_
+  in
+  let blocks =
+    Addr.Map.mapi
+      (fun pc block ->
+        if Addr.Set.mem pc block_subset then begin
+          Format.eprintf "@[<v>block before subst: @,";
+          Code.Print.block (fun _ _ -> "") pc block;
+          Format.eprintf "@]";
+          let res = Subst.Bound.block s block in
+          Format.eprintf "@[<v>block after subst: @,";
+          Code.Print.block (fun _ _ -> "") pc res;
+          Format.eprintf "@]";
+          res
+        end else block
+        )
+      p.blocks
+  in
+  { p with blocks }
+
 let f (p : Code.program) =
   let p = split_blocks p in
   let closure_continuation =
@@ -442,11 +481,12 @@ let f (p : Code.program) =
     in
     p.free_pc, { start = p.start; blocks; free_pc = p.free_pc + 1 }
   in
-  let p =
+  let p, cps_blocks =
     Code.fold_closures
       p
-      (fun _ _ (start, _) ({ blocks; free_pc; _ } as p) ->
-        Printf.eprintf "Translating closure starting at %d\n%!" start;
+      (fun _ _ (start, _) ({ blocks; free_pc; _ } as p, cps_blocks) ->
+        Printf.eprintf "Translating closure starting at %d ;    " start;
+        Printf.eprintf "free_pc = %d\n%!" free_pc;
         let cfg = build_graph blocks start in
         let closure_jc =
           let idom = dominator_tree cfg in
@@ -460,38 +500,14 @@ let f (p : Code.program) =
           ; cps_pc_of_direct = fun pc -> cps_pc_of_direct ~st pc
           }
         in
-        (*
-        (* Convert closure tables to the CPS addresses *)
-        let closure_of_jump =
-          Addr.Map.fold
-            (fun pc cname acc ->
-              Addr.Map.add (st.cps_pc_of_direct pc) cname acc
-            )
-            closure_jc.closure_of_jump
-            Addr.Map.empty
-        in
-        let closures_of_alloc_site =
-          Addr.Map.fold
-            (fun pc cname_caddr_list acc ->
-              Addr.Map.add
-                (st.cps_pc_of_direct pc)
-                (List.map
-                  cname_caddr_list
-                  ~f:(fun (cname, caddr) -> cname, st.cps_pc_of_direct caddr))
-                acc
-            )
-            closure_jc.closures_of_alloc_site
-            Addr.Map.empty
-        in
-        let rec new_st =
-          { st with
-          jc = { closure_of_jump; closures_of_alloc_site }
-          ; cps_pc_of_direct = fun pc -> cps_pc_of_direct ~st:new_st pc
-          }
-        in
-        let st = new_st in
-        *)
         let start_cps = st.cps_pc_of_direct start in
+        let add_cps_translation : Addr.t -> (Addr.t -> block) -> unit =
+          fun direct_addr mk_block ->
+            let cps_pc = st.cps_pc_of_direct direct_addr in
+            let new_block = mk_block cps_pc in
+            let new_blocks, free_pc = st.new_blocks in
+            st.new_blocks <- Addr.Map.add cps_pc new_block new_blocks, free_pc
+        in
         let k = closure_continuation start_cps in
         (* For every block in the closure,
            1. add its CPS translation to the block map at a fresh address
@@ -503,24 +519,44 @@ let f (p : Code.program) =
           Code.traverse
             { fold = Code.fold_children }
             (fun pc blocks ->
-              Printf.eprintf "Translating block %d mapped to %d\n%!" pc (st.cps_pc_of_direct pc);
-              let cps_pc = st.cps_pc_of_direct pc in
-              Addr.Map.add
-                cps_pc
-                (cps_block ~st ~k ~orig_pc:pc ~cps_pc (Addr.Map.find pc blocks))
-              @@ Addr.Map.add
-                   pc
-                   (rewrite_direct_block ~st (Addr.Map.find pc blocks))
-                   blocks)
+              Printf.eprintf "running block translation function ;     ";
+              Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+              add_cps_translation
+                pc
+                (fun cps_pc ->
+                  Printf.eprintf "inner block translation function ;      ";
+                  Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                  Printf.eprintf "Translating block %d mapped to %d\n%!" pc (st.cps_pc_of_direct pc);
+                  let res = cps_block ~st ~k ~orig_pc:pc ~cps_pc (Addr.Map.find pc blocks) in
+                  Printf.eprintf "end of inner block translation function ;      ";
+                  Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                  res
+                );
+              let res = Addr.Map.add
+                 pc
+                 (rewrite_direct_block ~st (Addr.Map.find pc blocks))
+                 blocks in
+              Printf.eprintf "finished translating block %d ;      " pc;
+              Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+              res)
             start
             st.blocks
             st.blocks
         in
         let new_blocks, free_pc = st.new_blocks in
         let blocks = Addr.Map.fold Addr.Map.add new_blocks blocks in
-        { p with blocks; free_pc })
-      p
+        let cps_blocks =
+          Addr.Map.fold (fun pc _ acc -> Addr.Set.add pc acc) new_blocks cps_blocks
+        in
+        Printf.eprintf "finished translating closure %d ;      " start;
+        Printf.eprintf "free_pc = %d\n%!" free_pc;
+        { p with blocks; free_pc }, cps_blocks)
+      (p, Addr.Set.empty)
   in
+
+  (* Substitute all variables bound in the CPS blocks with fresh variables to
+     avoid clashing with the definitions in the original blocks. *)
+  let p = subst_bound_with_fresh ~block_subset:cps_blocks p in
 
   (* Call [caml_callback] to set up the execution context. *)
   let new_start = p.free_pc in

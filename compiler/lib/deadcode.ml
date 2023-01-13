@@ -119,7 +119,12 @@ let rec filter_args st pl al =
   | _ -> assert false
 
 let filter_cont blocks st (pc, args) =
+  Printf.eprintf "filter_cont %d\nargs = " pc;
+  List.iter args ~f:(fun arg -> Printf.eprintf "%s, " @@ Var.to_string arg);
   let params = (Addr.Map.find pc blocks).params in
+  Printf.eprintf "\nparams = ";
+  List.iter params ~f:(fun arg -> Printf.eprintf "%s, " @@ Var.to_string arg);
+  Printf.eprintf "\n%!";
   pc, filter_args st params args
 
 let filter_closure blocks st i =

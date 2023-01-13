@@ -15,12 +15,21 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ * Foundation, Inc., 59 Temple Place - Suite 330, Bostons, MA 02111-1307, USA.
  *)
 open! Stdlib
 
 val iter_block_free_vars : (Code.Var.t -> unit) -> Code.block -> unit
 
-val iter_block_bound_vars : (Code.Var.t -> unit) -> Code.block -> unit
+(** Iterate on the variables bound in a block (let-bound identifiers and block
+    parameters). If [closure_params] is [true] (by default, it is [false]),
+    these variables include the parameters of closures created in the block. *)
+val iter_block_bound_vars :
+  ?closure_params:bool -> (Code.Var.t -> unit) -> Code.block -> unit
+
+(** Computes the set of variables that are bound in a block. If
+  [closure_params] is [true] (by default, it is [false]), these variables
+  include the parameters of closures created in the block. *)
+val block_bound_vars : ?closure_params:bool -> Code.block -> Code.Var.Set.t
 
 val f : Code.program -> Code.Var.Set.t Code.Addr.Map.t

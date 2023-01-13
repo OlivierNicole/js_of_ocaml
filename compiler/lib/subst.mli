@@ -32,6 +32,8 @@ val block : (Var.t -> Var.t) -> block -> block
 
 val last : (Var.t -> Var.t) -> last -> last
 
+(** [cont s addr program] applies the substition [s] in the block of address
+    [addr] and its successors, recursively, in [program]. *)
 val cont : (Var.t -> Var.t) -> int -> program -> program
 
 val from_array : Var.t option array -> Var.t -> Var.t
@@ -39,3 +41,12 @@ val from_array : Var.t option array -> Var.t -> Var.t
 val build_mapping : Var.t list -> Var.t list -> Var.t Var.Map.t
 
 val from_map : Var.t Var.Map.t -> Var.t -> Var.t
+
+(** The operations of this module also substitute the variables names that
+    appear on the left-hand-side of a {!constructor:Code.Let}, or as block
+    parameters, or as closure parameters. *)
+module Bound : sig
+  val instr : (Var.t -> Var.t) -> instr -> instr
+  val instrs : (Var.t -> Var.t) -> instr list -> instr list
+  val block : (Var.t -> Var.t) -> block -> block
+end
