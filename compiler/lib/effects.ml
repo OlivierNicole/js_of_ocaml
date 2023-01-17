@@ -407,12 +407,12 @@ let rewrite_direct_block ~st block =
   { block with body = List.concat_map ~f:rewrite_instr block.body }
 
 (* Substitute all bound variables with fresh ones, in a subset of program blocks. *)
-let subst_bound_with_fresh ~block_subset p =
+let subst_bound_with_fresh ~block_subset blocks =
   let bound =
     Addr.Map.fold
       (fun _ block bound ->
         Var.Set.union bound (Freevars.block_bound_vars ~closure_params:true block))
-      p.Code.blocks
+      blocks
       Var.Set.empty
   in
   let s =
@@ -424,25 +424,24 @@ let subst_bound_with_fresh ~block_subset p =
         Hashtbl.add tbl (Var.idx v) new_;
         new_
   in
-  let blocks =
-    Addr.Map.mapi
-      (fun pc block ->
-        if Addr.Set.mem pc block_subset then begin
-          Format.eprintf "@[<v>block before subst: @,";
-          Code.Print.block (fun _ _ -> "") pc block;
-          Format.eprintf "@]";
-          let res = Subst.Bound.block s block in
-          Format.eprintf "@[<v>block after subst: @,";
-          Code.Print.block (fun _ _ -> "") pc res;
-          Format.eprintf "@]";
-          res
-        end else block
-        )
-      p.blocks
-  in
-  { p with blocks }
+  Addr.Map.mapi
+    (fun pc block ->
+      if Addr.Set.mem pc block_subset then begin
+        Format.eprintf "@[<v>block before subst: @,";
+        Code.Print.block (fun _ _ -> "") pc block;
+        Format.eprintf "@]";
+        let res = Subst.Bound.block s block in
+        Format.eprintf "@[<v>block after subst: @,";
+        Code.Print.block (fun _ _ -> "") pc res;
+        Format.eprintf "@]";
+        res
+      end else block
+      )
+    blocks
 
 let f (p : Code.program) =
+  let p = Lambda_lifting_simple.f p in
+
   let p = split_blocks p in
   let closure_continuation =
     (* Provide a name for the continuation of a closure (before CPS
@@ -481,7 +480,7 @@ let f (p : Code.program) =
     in
     p.free_pc, { start = p.start; blocks; free_pc = p.free_pc + 1 }
   in
-  let p, cps_blocks =
+  let p, _ =
     Code.fold_closures
       p
       (fun _ _ (start, _) ({ blocks; free_pc; _ } as p, cps_blocks) ->
@@ -548,15 +547,16 @@ let f (p : Code.program) =
         let cps_blocks =
           Addr.Map.fold (fun pc _ acc -> Addr.Set.add pc acc) new_blocks cps_blocks
         in
+
+        (* Substitute all variables bound in the CPS blocks with fresh variables to
+           avoid clashing with the definitions in the original blocks. *)
+        let blocks = subst_bound_with_fresh ~block_subset:cps_blocks blocks in
+
         Printf.eprintf "finished translating closure %d ;      " start;
         Printf.eprintf "free_pc = %d\n%!" free_pc;
         { p with blocks; free_pc }, cps_blocks)
       (p, Addr.Set.empty)
   in
-
-  (* Substitute all variables bound in the CPS blocks with fresh variables to
-     avoid clashing with the definitions in the original blocks. *)
-  let p = subst_bound_with_fresh ~block_subset:cps_blocks p in
 
   (* Call [caml_callback] to set up the execution context. *)
   let new_start = p.free_pc in
