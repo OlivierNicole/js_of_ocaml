@@ -150,7 +150,9 @@ end = struct
 
   let to_string ?origin i = Var_printer.to_string printer ?origin i
 
-  let print f x = Format.fprintf f "v%d" x
+  (*let print f x = Format.fprintf f "v%d" x*)
+
+  let print f x = Format.pp_print_string f (to_string x)
 
   (* Format.fprintf f "%s" (to_string x) *)
 
@@ -692,3 +694,32 @@ let invariant { blocks; start; _ } =
         List.iter block.body ~f:check_instr;
         check_last block.branch)
       blocks)
+
+(****)
+
+let fold_closures_depth
+    (p : program)
+    (f : depth:int -> Var.t option -> Var.t list -> cont -> 'd -> 'd)
+    (accu : 'd) =
+  let rec fold_over_block pc ~depth accu =
+    traverse
+      { fold = fold_children }
+      (fun pc accu ->
+        let block = Addr.Map.find pc p.blocks in
+        List.fold_left
+          block.body
+          ~f:(fun accu instr ->
+            match instr with
+            | Let (cname, Closure (params, ((pc, _) as cont))) ->
+                fold_over_block
+                  pc
+                  ~depth:(depth + 1)
+                  (f ~depth:(depth + 1) (Some cname) params cont accu)
+            | _ -> accu
+          )
+          ~init:accu)
+      pc
+      p.blocks
+      accu
+  in
+  fold_over_block p.start ~depth:0 (f ~depth:0 None [] (p.start, []) accu)

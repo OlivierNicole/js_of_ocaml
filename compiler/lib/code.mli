@@ -218,8 +218,23 @@ type 'c fold_blocs = block Addr.Map.t -> Addr.t -> (Addr.t -> 'c -> 'c) -> 'c ->
 
 type fold_blocs_poly = { fold : 'a. 'a fold_blocs } [@@unboxed]
 
+(** [fold_closures p f init] folds [f] over all closures in the program [p],
+    starting from the initial value [init]. For each closure, [f] is called
+    with the following arguments: the closure name (enclosed in
+    {!Stdlib.Some}), its parameter list, the address and parameter instantiation
+    of its first block, and the current accumulator. In addition, [f] is called
+    on the initial block [p.start], with [None] as the closure name.
+    All closures in all blocks of [p] are included in the fold, not only the
+    ones reachable from [p.start]. *)
 val fold_closures :
   program -> (Var.t option -> Var.t list -> cont -> 'd -> 'd) -> 'd -> 'd
+
+  (** Same as {!fold_closures}, but also passes the depth of the first block to the
+    fold function. The block at [p.start] is of depth 0; all blocks reachable
+    from a block of depth [n] are of depth [n]; the first block of a closure
+    defined at depth [n] is of depth [n + 1]. *)
+val fold_closures_depth :
+  program -> (depth:int -> Var.t option -> Var.t list -> cont -> 'd -> 'd) -> 'd -> 'd
 
 val fold_children : 'c fold_blocs
 

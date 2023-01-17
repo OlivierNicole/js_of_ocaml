@@ -206,9 +206,9 @@ let cps_last ~st (last : last) ~k : instr list * last =
         ]
       , Return ret )
 
-let cps_instr ~st (instr : instr) : instr list =
+let cps_instr ~st ~depth (instr : instr) : instr list =
   match instr with
-  | Let (c, Closure (params, (pc, args))) ->
+  | Let (c, Closure (params, (pc, args))) when depth > 0 ->
       (* Also add CPS closure (this one becomes direct style) and create a pair *)
       let direct_c = Var.fresh () in
       let cps_c = Var.fresh () in
@@ -228,7 +228,7 @@ let cps_instr ~st (instr : instr) : instr list =
       assert false
   | _ -> [ instr ]
 
-let cps_block ~st ~k ~orig_pc ~cps_pc block =
+let cps_block ~st ~k ~depth ~orig_pc ~cps_pc block =
   Printf.eprintf "cps_block %d mapped to %d\n%!" orig_pc cps_pc;
   let alloc_jump_closures =
     match Addr.Map.find orig_pc st.jc.closures_of_alloc_site with
@@ -305,12 +305,12 @@ let cps_block ~st ~k ~orig_pc ~cps_pc block =
   let body, last =
     match rewritten_block with
     | Some (body_prefix, last_instrs, last) ->
-        List.concat (List.map body_prefix ~f:(fun i -> cps_instr ~st i))
+        List.concat (List.map body_prefix ~f:(fun i -> cps_instr ~st ~depth i))
         @ last_instrs, last
     | None ->
         let last_instrs, last = cps_last ~st block.branch ~k in
         let body =
-          List.concat (List.map block.body ~f:(fun i -> cps_instr ~st i))
+          List.concat (List.map block.body ~f:(fun i -> cps_instr ~st ~depth i))
           @ alloc_jump_closures
           @ last_instrs
         in
@@ -406,24 +406,23 @@ let rewrite_direct_block ~st block =
   in
   { block with body = List.concat_map ~f:rewrite_instr block.body }
 
-(* Substitute all bound variables with fresh ones, in a subset of program blocks. *)
-let subst_bound_with_fresh ~block_subset blocks =
+  (* Substitute all bound variables and members of [add] with fresh ones,
+     except for variable [remove] (if not [None]), in a subset of program
+     blocks. [remove] is inteded to be the name of the current recursive
+     function, if any. *)
+let subst_bound_with_fresh ~block_subset ~add ~remove blocks =
   let bound =
     Addr.Map.fold
       (fun _ block bound ->
         Var.Set.union bound (Freevars.block_bound_vars ~closure_params:true block))
       blocks
-      Var.Set.empty
+      add
   in
   let s =
-    let tbl = Hashtbl.create (Var.count ()) in
-    fun v ->
-      try Hashtbl.find tbl (Var.idx v)
-      with Not_found ->
-        let new_ = if Var.Set.mem v bound then Var.fresh () else v in
-        Hashtbl.add tbl (Var.idx v) new_;
-        new_
+    Var.Set.fold (fun var m -> Var.Map.add var (Var.fork var) m) bound Var.Map.empty
   in
+  let s = match remove with Some f -> Var.Map.remove f s | None -> s in
+  let s = Subst.from_map s in
   Addr.Map.mapi
     (fun pc block ->
       if Addr.Set.mem pc block_subset then begin
@@ -480,10 +479,10 @@ let f (p : Code.program) =
     in
     p.free_pc, { start = p.start; blocks; free_pc = p.free_pc + 1 }
   in
-  let p, _ =
-    Code.fold_closures
+  let p =
+    Code.fold_closures_depth
       p
-      (fun _ _ (start, _) ({ blocks; free_pc; _ } as p, cps_blocks) ->
+      (fun ~depth cname cparams (start, _) ({ blocks; free_pc; _ } as p) ->
         Printf.eprintf "Translating closure starting at %d ;    " start;
         Printf.eprintf "free_pc = %d\n%!" free_pc;
         let cfg = build_graph blocks start in
@@ -526,7 +525,7 @@ let f (p : Code.program) =
                   Printf.eprintf "inner block translation function ;      ";
                   Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
                   Printf.eprintf "Translating block %d mapped to %d\n%!" pc (st.cps_pc_of_direct pc);
-                  let res = cps_block ~st ~k ~orig_pc:pc ~cps_pc (Addr.Map.find pc blocks) in
+                  let res = cps_block ~st ~k ~orig_pc:pc ~cps_pc ~depth (Addr.Map.find pc blocks) in
                   Printf.eprintf "end of inner block translation function ;      ";
                   Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
                   res
@@ -545,17 +544,25 @@ let f (p : Code.program) =
         let new_blocks, free_pc = st.new_blocks in
         let blocks = Addr.Map.fold Addr.Map.add new_blocks blocks in
         let cps_blocks =
-          Addr.Map.fold (fun pc _ acc -> Addr.Set.add pc acc) new_blocks cps_blocks
+          Addr.Map.fold (fun pc _ acc -> Addr.Set.add pc acc) new_blocks Addr.Set.empty
         in
 
         (* Substitute all variables bound in the CPS blocks with fresh variables to
-           avoid clashing with the definitions in the original blocks. *)
-        let blocks = subst_bound_with_fresh ~block_subset:cps_blocks blocks in
+           avoid clashing with the definitions in the original blocks. The only
+           variable we don't substitute is the current recursive function (if
+           any). *)
+        let blocks =
+          subst_bound_with_fresh
+            ~block_subset:cps_blocks
+            ~add:(Var.Set.of_list cparams)
+            ~remove:cname
+            blocks
+        in
 
         Printf.eprintf "finished translating closure %d ;      " start;
         Printf.eprintf "free_pc = %d\n%!" free_pc;
-        { p with blocks; free_pc }, cps_blocks)
-      (p, Addr.Set.empty)
+        { p with blocks; free_pc })
+      p
   in
 
   (* Call [caml_callback] to set up the execution context. *)
