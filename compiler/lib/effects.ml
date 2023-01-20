@@ -206,27 +206,45 @@ let cps_last ~st (last : last) ~k : instr list * last =
         ]
       , Return ret )
 
-let cps_instr ~st ~depth (instr : instr) : instr list =
+let cps_instr ~st ~depth (instr : instr) : instr list * Var.t Var.Map.t =
   match instr with
   | Let (c, Closure (params, (pc, args))) when depth > 0 ->
       (* Also add CPS closure (this one becomes direct style) and create a pair *)
-      let direct_c = Var.fresh () in
-      let cps_c = Var.fresh () in
+      let direct_c = Var.fork c in
+      let cps_c = Var.fork c in
       let cps_pc = st.cps_pc_of_direct pc in
-      [ Let (cps_c, Closure (params @ [ st.closure_continuation cps_pc ], (cps_pc, args)))
-      ; Let (direct_c, Closure (params, (pc, args)))
-      ; Let (c, Block (0, [| direct_c; cps_c |], NotArray)) ]
+      let params' = List.map ~f:Var.fork params in
+      let subst =
+        List.fold_left2
+          ~f:(fun m p p' -> Var.Map.add p p' m)
+          ~init:Var.Map.empty
+          params
+          params'
+      in
+      ( [ Let (cps_c, Closure (params @ [ st.closure_continuation cps_pc ], (cps_pc, args)))
+        ; Let (direct_c, Closure (params', (pc, args)))
+        ; Let (c, Block (0, [| direct_c; cps_c |], NotArray)) ]
+      , subst )
   | Let (x, Prim (Extern "caml_alloc_dummy_function", [ size; arity ])) -> (
       match arity with
       | Pc (Int a) ->
-          [ Let
-              ( x
-              , Prim (Extern "caml_alloc_dummy_function", [ size; Pc (Int (Int32.succ a)) ])
-              ) ]
+          ( [ Let
+                ( x
+                , Prim (Extern "caml_alloc_dummy_function", [ size; Pc (Int (Int32.succ a)) ])
+                ) ]
+          , Var.Map.empty )
       | _ -> assert false)
   | Let (_, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) ->
       assert false
-  | _ -> [ instr ]
+  | _ -> ([ instr ], Var.Map.empty)
+
+let concat_union (l : ('a list * 'b Var.Map.t) list) : 'a list * 'b Var.Map.t =
+  List.fold_left
+    l
+    ~f:(fun (instrs, subst) (is,s) ->
+          instrs @ is, Var.Map.union (fun _ _ -> assert false) subst s
+        )
+    ~init:([], Var.Map.empty)
 
 let cps_block ~st ~k ~depth ~orig_pc ~cps_pc block =
   Printf.eprintf "cps_block %d mapped to %d\n%!" orig_pc cps_pc;
@@ -302,22 +320,23 @@ let cps_block ~st ~k ~depth ~orig_pc ~cps_pc block =
     | None, _ -> None
   in
 
-  let body, last =
+  let body, last, subst =
     match rewritten_block with
     | Some (body_prefix, last_instrs, last) ->
-        List.concat (List.map body_prefix ~f:(fun i -> cps_instr ~st ~depth i))
-        @ last_instrs, last
+        let instrs, subst =
+          concat_union (List.map body_prefix ~f:(fun i -> cps_instr ~st ~depth i))
+        in
+        instrs @ last_instrs, last, subst
     | None ->
         let last_instrs, last = cps_last ~st block.branch ~k in
-        let body =
-          List.concat (List.map block.body ~f:(fun i -> cps_instr ~st ~depth i))
-          @ alloc_jump_closures
-          @ last_instrs
+        let body, subst =
+          concat_union (List.map block.body ~f:(fun i -> cps_instr ~st ~depth i))
         in
-        body, last
+        let body = body @ alloc_jump_closures @ last_instrs in
+        body, last, subst
   in
 
-  { params = block.params; body; branch = last }
+  { params = block.params; body; branch = last }, subst
 
 let split_blocks (p : Code.program) =
   (* Ensure that function applications and effect primitives are in
@@ -368,59 +387,75 @@ let split_blocks (p : Code.program) =
    the fact that closure are turned into (direct style closure, CPS closure)
    pairs. Also rewrite the effect primitives to switch to the CPS versions of
    functions (for resume) or fail (for perform). *)
-let rewrite_direct_block ~st block =
+let rewrite_direct_block ~st ~pc ~depth ~toplevel_closures block =
+  Format.eprintf "@[<v>rewrite_direct %d, depth = %d@,@]%!" pc depth;
   let rewrite_instr = function
-    | Let (x, Apply { f; args; exact }) ->
-        let f_direct = Var.fresh () in
-        [ Let (f_direct, Field (f, 0))
-        ; Let (x, Apply { f = f_direct; args; exact }) ]
-    | Let (x, Closure (params, (pc, args))) ->
-        let direct_c = Var.fresh () in
-        let cps_c = Var.fresh () in
+    | Let (x, Apply { f; args; exact }) when not (Var.Set.mem f toplevel_closures) ->
+        let f_direct = Var.fork f in
+        ( [ Let (f_direct, Field (f, 0))
+          ; Let (x, Apply { f = f_direct; args; exact }) ]
+        , Var.Map.empty )
+    | Let (x, Closure (params, (pc, args))) when depth > 0 ->
+        let direct_c = Var.fork x in
+        let cps_c = Var.fork x in
         let cps_pc = st.cps_pc_of_direct pc in
-        [ Let (direct_c, Closure (params, (pc, args)))
-        ; Let ( cps_c, Closure (params @ [ st.closure_continuation cps_pc ]
-              , (cps_pc, args)) )
-        ; Let (x, Block (0, [| direct_c; cps_c |], NotArray)) ]
+        let params' = List.map ~f:Var.fork params in
+        let subst =
+          List.fold_left2
+            ~f:(fun m p p' -> Var.Map.add p p' m)
+            ~init:Var.Map.empty
+            params
+            params'
+        in
+        ( [ Let (direct_c, Closure (params, (pc, args)))
+          ; Let ( cps_c, Closure (params' @ [ st.closure_continuation cps_pc ]
+                , (cps_pc, args)) )
+          ; Let (x, Block (0, [| direct_c; cps_c |], NotArray)) ]
+        , subst )
     | Let (x, Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ])) ->
         (* Pass the identity as a continuation and call the CPS version of [f] *)
         let k = Var.fresh () in
         let f_cps = Var.fresh () in
-        [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv st.ident_fn ]))
-        ; Let (f_cps, Field (f, 2))
-        ; Let (x, Apply { f = f_cps; args = [ arg; k ]; exact = false })
-        ]
+        ( [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv st.ident_fn ]))
+          ; Let (f_cps, Field (f, 2))
+          ; Let (x, Apply { f = f_cps; args = [ arg; k ]; exact = false })
+          ]
+        , Var.Map.empty )
     | Let (x, Prim (Extern "%perform", [ Pv effect ])) ->
         (* Perform the effect, which should call the "Unhandled effect"
            handler. *)
         let k = Int 0l in (* Will not be used *)
-        [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pc (Int 0l); Pc k ]))
-        ]
+        ( [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pc (Int 0l); Pc k ]))
+          ]
+        , Var.Map.empty )
     | Let (x, Prim (Extern "%reperform", [ Pv effect; Pv continuation ])) ->
         (* Similar to previous case *)
         let k = Int 0l in (* Will not be used *)
-        [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ]))
-        ]
+        ( [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ]))
+          ]
+        , Var.Map.empty )
     | (Let _ | Assign _ | Set_field _ | Offset_ref _ | Array_set _) as instr ->
-        [ instr ]
+        [ instr ], Var.Map.empty
   in
-  { block with body = List.concat_map ~f:rewrite_instr block.body }
+  let body, subst = concat_union (List.map ~f:rewrite_instr block.body) in
+  { block with body }, subst
 
-  (* Substitute all bound variables and members of [add] with fresh ones,
-     except for variable [remove] (if not [None]), in a subset of program
-     blocks. [remove] is inteded to be the name of the current recursive
-     function, if any. *)
+  (* Substitute all bound variables with fresh ones, also substitute as
+     specified by [add]; except for variable [remove] (if not [None]), in a
+     subset of program blocks. [remove] is inteded to be the name of the
+     current recursive function, if any. *)
 let subst_bound_with_fresh ~block_subset ~add ~remove blocks =
   let bound =
     Addr.Map.fold
       (fun _ block bound ->
-        Var.Set.union bound (Freevars.block_bound_vars ~closure_params:true block))
+        Var.Set.union bound (Freevars.block_bound_vars ~closure_params:false block))
       blocks
-      add
+      Var.Set.empty
   in
   let s =
     Var.Set.fold (fun var m -> Var.Map.add var (Var.fork var) m) bound Var.Map.empty
   in
+  let s = Var.Map.union (fun _ x _ -> Some x) add s in
   let s = match remove with Some f -> Var.Map.remove f s | None -> s in
   let s = Subst.from_map s in
   Addr.Map.mapi
@@ -442,6 +477,27 @@ let f (p : Code.program) =
   let p = Lambda_lifting_simple.f p in
 
   let p = split_blocks p in
+
+  Format.eprintf "@[<v>After lambda lifting and block splitting...@,";
+  Code.Print.program (fun _ _ -> "") p;
+  Format.eprintf "@]";
+
+  let toplevel_closures =
+    Code.fold_closures_depth
+      p
+      (fun ~depth name _ _ toplevel_closures ->
+        Format.(eprintf "@[<v>fold_closures_depth function on %a, depth = %d@,@]" (pp_print_option (fun fmt v -> pp_print_string fmt (Var.to_string v))) name depth);
+        let open Var.Set in
+        match depth, name with
+        | 1, Some f -> add f toplevel_closures
+        | _, _ -> toplevel_closures
+      )
+      Var.Set.empty
+  in
+  Format.eprintf "@[<hv 2>Toplevel closures:@ ";
+  Var.Set.iter (fun v -> Format.eprintf "%s,@ " (Var.to_string v)) toplevel_closures;
+  Format.eprintf "@]";
+
   let closure_continuation =
     (* Provide a name for the continuation of a closure (before CPS
        transform), which can be referred from all the blocks it contains *)
@@ -479,91 +535,161 @@ let f (p : Code.program) =
     in
     p.free_pc, { start = p.start; blocks; free_pc = p.free_pc + 1 }
   in
-  let p =
+  let p, cps_blocks, direct_subst, _cps_subst =
     Code.fold_closures_depth
       p
-      (fun ~depth cname cparams (start, _) ({ blocks; free_pc; _ } as p) ->
-        Printf.eprintf "Translating closure starting at %d ;    " start;
-        Printf.eprintf "free_pc = %d\n%!" free_pc;
-        let cfg = build_graph blocks start in
-        let closure_jc =
-          let idom = dominator_tree cfg in
-          jump_closures cfg idom in
-        let rec st =
-          { new_blocks = Addr.Map.empty, free_pc
-          ; blocks
-          ; jc = closure_jc
-          ; closure_continuation
-          ; ident_fn
-          ; cps_pc_of_direct = fun pc -> cps_pc_of_direct ~st pc
-          }
-        in
-        let start_cps = st.cps_pc_of_direct start in
-        let add_cps_translation : Addr.t -> (Addr.t -> block) -> unit =
-          fun direct_addr mk_block ->
-            let cps_pc = st.cps_pc_of_direct direct_addr in
-            let new_block = mk_block cps_pc in
-            let new_blocks, free_pc = st.new_blocks in
-            st.new_blocks <- Addr.Map.add cps_pc new_block new_blocks, free_pc
-        in
-        let k = closure_continuation start_cps in
-        (* For every block in the closure,
-           1. add its CPS translation to the block map at a fresh address
-           2. keep the direct-style block but modify all function applications
-              to take into account the fact that closure are turned into
-              (direct style closure, CPS closure) pairs, and modify uses of the
-              %resume and %perform primitives. *)
-        let blocks =
-          Code.traverse
-            { fold = Code.fold_children }
-            (fun pc blocks ->
-              Printf.eprintf "running block translation function ;     ";
-              Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
-              add_cps_translation
-                pc
-                (fun cps_pc ->
-                  Printf.eprintf "inner block translation function ;      ";
-                  Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
-                  Printf.eprintf "Translating block %d mapped to %d\n%!" pc (st.cps_pc_of_direct pc);
-                  let res = cps_block ~st ~k ~orig_pc:pc ~cps_pc ~depth (Addr.Map.find pc blocks) in
-                  Printf.eprintf "end of inner block translation function ;      ";
-                  Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
-                  res
-                );
-              let res = Addr.Map.add
-                 pc
-                 (rewrite_direct_block ~st (Addr.Map.find pc blocks))
-                 blocks in
-              Printf.eprintf "finished translating block %d ;      " pc;
-              Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
-              res)
-            start
-            st.blocks
-            st.blocks
-        in
-        let new_blocks, free_pc = st.new_blocks in
-        let blocks = Addr.Map.fold Addr.Map.add new_blocks blocks in
-        let cps_blocks =
-          Addr.Map.fold (fun pc _ acc -> Addr.Set.add pc acc) new_blocks Addr.Set.empty
-        in
+      (fun ~depth _ _ (start, _) ({ blocks; free_pc; _ } as p, cps_blocks, direct_subst, cps_subst) ->
+        (* If this a toplevel closure (code of depth 1) (resulting from lambda
+           lifting), we don't CPS-translate it. We also don't need to
+           CPS-translate the toplevel code (depth 0). *)
+        if depth <= 1 then begin
+          Printf.eprintf "Adapting direct closure starting at %d ;    " start;
+          let cfg = build_graph blocks start in
+          let closure_jc =
+            let idom = dominator_tree cfg in
+            jump_closures cfg idom in
+          let rec st =
+            { new_blocks = Addr.Map.empty, free_pc
+            ; blocks
+            ; jc = closure_jc
+            ; closure_continuation
+            ; ident_fn
+            ; cps_pc_of_direct = fun pc -> cps_pc_of_direct ~st pc
+            }
+          in
+          let blocks, direct_subst =
+            Code.traverse
+              { fold = Code.fold_children }
+              (fun pc (blocks, direct_subst) ->
+                let new_direct_block, s =
+                  rewrite_direct_block
+                    ~st
+                    ~pc
+                    ~depth
+                    ~toplevel_closures
+                    (Addr.Map.find pc blocks)
+                in
+                let res = Addr.Map.add
+                   pc
+                   new_direct_block
+                   blocks
+                in
+                let direct_subst = Var.Map.union (fun _ _ -> assert false) direct_subst s in
+                res, direct_subst)
+              start
+              st.blocks
+              (st.blocks, direct_subst)
+          in
 
-        (* Substitute all variables bound in the CPS blocks with fresh variables to
-           avoid clashing with the definitions in the original blocks. The only
-           variable we don't substitute is the current recursive function (if
-           any). *)
-        let blocks =
-          subst_bound_with_fresh
-            ~block_subset:cps_blocks
-            ~add:(Var.Set.of_list cparams)
-            ~remove:cname
-            blocks
-        in
+          Printf.eprintf "finished adapting direct closure %d ;      " start;
+          { p with blocks }, cps_blocks, direct_subst, cps_subst
+        end
+        else begin
+          Printf.eprintf "Translating closure starting at %d ;    " start;
+          Printf.eprintf "free_pc = %d\n%!" free_pc;
+          let cfg = build_graph blocks start in
+          let closure_jc =
+            let idom = dominator_tree cfg in
+            jump_closures cfg idom in
+          let rec st =
+            { new_blocks = Addr.Map.empty, free_pc
+            ; blocks
+            ; jc = closure_jc
+            ; closure_continuation
+            ; ident_fn
+            ; cps_pc_of_direct = fun pc -> cps_pc_of_direct ~st pc
+            }
+          in
+          let start_cps = st.cps_pc_of_direct start in
+          let add_cps_translation direct_addr (mk_block : Addr.t -> block * Var.t Var.Map.t)
+                : Var.t Var.Map.t =
+              (* Add the block as a side effect, and return the variable
+                 substitution created by the block-making function *)
+              let cps_pc = st.cps_pc_of_direct direct_addr in
+              let new_block, subst = mk_block cps_pc in
+              let new_blocks, free_pc = st.new_blocks in
+              st.new_blocks <- Addr.Map.add cps_pc new_block new_blocks, free_pc;
+              subst
+          in
+          let k = closure_continuation start_cps in
+          (* For every block in the closure,
+             1. add its CPS translation to the block map at a fresh address
+             2. keep the direct-style block but modify all function applications
+                to take into account the fact that closure are turned into
+                (direct style closure, CPS closure) pairs, and modify uses of the
+                %resume and %perform primitives. *)
+          let blocks, direct_subst, cps_subst =
+            Code.traverse
+              { fold = Code.fold_children }
+              (fun pc (blocks, direct_subst, cps_subst) ->
+                Printf.eprintf "running block translation function ;     ";
+                Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                let s =
+                  add_cps_translation
+                    pc
+                    (fun cps_pc ->
+                      Printf.eprintf "inner block translation function ;      ";
+                      Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                      Printf.eprintf "Translating block %d mapped to %d, depth = %d\n%!" pc (st.cps_pc_of_direct pc) depth;
+                      let res = cps_block ~st ~k ~orig_pc:pc ~cps_pc ~depth (Addr.Map.find pc blocks) in
+                      Printf.eprintf "end of inner block translation function ;      ";
+                      Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                      res
+                    )
+                in
+                let cps_subst = Var.Map.union (fun _ _ -> assert false) cps_subst s in
+                let new_direct_block, s =
+                  rewrite_direct_block
+                    ~st
+                    ~pc
+                    ~depth
+                    ~toplevel_closures
+                    (Addr.Map.find pc blocks)
+                in
+                let res = Addr.Map.add
+                   pc
+                   new_direct_block
+                   blocks
+                in
+                let direct_subst = Var.Map.union (fun _ _ -> assert false) direct_subst s in
+                Printf.eprintf "finished translating block %d ;      " pc;
+                Printf.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                res, direct_subst, cps_subst)
+              start
+              st.blocks
+              (st.blocks, direct_subst, cps_subst)
+          in
+          let new_blocks, free_pc = st.new_blocks in
+          let blocks = Addr.Map.fold Addr.Map.add new_blocks blocks in
+          let cps_blocks =
+            Addr.Map.fold (fun pc _ acc -> Addr.Set.add pc acc) new_blocks cps_blocks
+          in
 
-        Printf.eprintf "finished translating closure %d ;      " start;
-        Printf.eprintf "free_pc = %d\n%!" free_pc;
-        { p with blocks; free_pc })
-      p
+          Printf.eprintf "finished translating closure %d ;      " start;
+          Printf.eprintf "free_pc = %d\n%!" free_pc;
+          { p with blocks; free_pc }, cps_blocks, direct_subst, cps_subst
+        end)
+      (p, Addr.Set.empty, Var.Map.empty, Var.Map.empty)
   in
+
+  (*
+  let all_blocks = Addr.Map.fold (fun a _ s -> Addr.Set.add a s) p.blocks Addr.Set.empty in
+  let direct_blocks = Addr.Set.diff all_blocks cps_blocks in*)
+
+  (* Substitute all variables bound in the CPS blocks with fresh variables to
+     avoid clashing with the definitions in the original blocks. There is also
+     a second substitution: all variables that were a closure parameter in the
+     original block must be substituted by the CPS version of that parameter
+     (generated by [rewrite_direct], because CPS closures are only ever defined
+in (toplevel) direct-style blocks). *)
+  let blocks =
+    subst_bound_with_fresh
+      ~block_subset:cps_blocks
+      ~add:direct_subst
+      ~remove:None
+      p.blocks
+  in
+  let p = { p with blocks } in
 
   (* Call [caml_callback] to set up the execution context. *)
   let new_start = p.free_pc in
