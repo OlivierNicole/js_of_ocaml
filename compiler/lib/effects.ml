@@ -539,11 +539,11 @@ let f (p : Code.program) =
     Code.fold_closures_depth
       p
       (fun ~depth _ _ (start, _) ({ blocks; free_pc; _ } as p, cps_blocks, direct_subst, cps_subst) ->
-        (* If this a toplevel closure (code of depth 1) (resulting from lambda
-           lifting), we don't CPS-translate it. We also don't need to
+        (* If this s a toplevel closure (code of depth 1) (resulting from
+           lambda lifting), we don't CPS-translate it. We also don't need to
            CPS-translate the toplevel code (depth 0). *)
         if depth <= 1 then begin
-          Printf.eprintf "Adapting direct closure starting at %d ;    " start;
+          Printf.eprintf "Adapting direct closure starting at %d ;    free_pc = %d" start free_pc;
           let cfg = build_graph blocks start in
           let closure_jc =
             let idom = dominator_tree cfg in
@@ -581,8 +581,11 @@ let f (p : Code.program) =
               (st.blocks, direct_subst)
           in
 
-          Printf.eprintf "finished adapting direct closure %d ;      " start;
-          { p with blocks }, cps_blocks, direct_subst, cps_subst
+          let new_blocks, free_pc = st.new_blocks in
+          assert (Addr.Map.is_empty new_blocks);
+
+          Printf.eprintf "finished adapting direct closure %d ;      free_pc = %d" start free_pc;
+          { p with blocks; free_pc }, cps_blocks, direct_subst, cps_subst
         end
         else begin
           Printf.eprintf "Translating closure starting at %d ;    " start;
