@@ -54,7 +54,7 @@ let is_undefined d =
 
 let add_expr_def defs x e =
   let idx = Var.idx x in
-  assert (Printf.eprintf "add_expr_def idx = %d\n%!" idx; is_undefined defs.(idx));
+  assert (Printf.eprintf "add_expr_def %s, idx = %d\n%!" (Var.to_string x) idx; is_undefined defs.(idx));
   defs.(idx) <- Expr e
 
 let add_assign_def vars defs x y =
@@ -67,7 +67,7 @@ let add_assign_def vars defs x y =
 let add_param_def vars defs x =
   add_var vars x;
   let idx = Var.idx x in
-  assert (is_undefined defs.(idx) || Poly.(defs.(idx) = Param));
+  assert (Printf.eprintf "add_param_def %s, idx = %d\n%!" (Var.to_string x) idx; is_undefined defs.(idx) || Poly.(defs.(idx) = Param));
   defs.(idx) <- Param
 
 (* x depends on y *)

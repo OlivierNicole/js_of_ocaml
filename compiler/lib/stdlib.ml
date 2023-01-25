@@ -379,6 +379,10 @@ module Option = struct
   let value ~default = function
     | None -> default
     | Some s -> s
+
+  let fold ~none ~some = function
+    | None -> none
+    | Some v -> some v
 end
 
 module Int64 = struct

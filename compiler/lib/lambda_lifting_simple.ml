@@ -73,26 +73,28 @@ let mark_bound_variables var_depth block depth =
           List.iter params ~f:(fun x -> var_depth.(Var.idx x) <- depth + 1)
       | _ -> ())
 
-let rec traverse var_depth (program, functions) pc depth =
+let rec traverse var_depth (program, functions, lifted) pc depth : _ * _ * Var.Set.t =
   Code.preorder_traverse
     { fold = Code.fold_children }
-    (fun pc (program, functions) ->
+    (fun pc (program, functions, lifted) ->
       let block = Code.Addr.Map.find pc program.blocks in
       mark_bound_variables var_depth block depth;
       if depth = 0
       then (
         assert (List.is_empty functions);
-        let program, body =
-          List.fold_right block.body ~init:(program, []) ~f:(fun i (program, rem) ->
+        let program, body, lifted' =
+          List.fold_right block.body ~init:(program, [], Var.Set.empty) ~f:(fun i (program, rem, lifted) ->
               match i with
               | Let (_, Closure (_, (pc', _))) as i ->
-                  let program, functions =
-                    traverse var_depth (program, []) pc' (depth + 1)
+                  let program, functions, lifted =
+                    traverse var_depth (program, [], lifted) pc' (depth + 1)
                   in
-                  program, List.rev_append functions (i :: rem)
-              | i -> program, i :: rem)
+                  program, List.rev_append functions (i :: rem), lifted
+              | i -> program, i :: rem, lifted)
         in
-        { program with blocks = Addr.Map.add pc { block with body } program.blocks }, [])
+        ( { program with blocks = Addr.Map.add pc { block with body } program.blocks }
+        , []
+        , Var.Set.union lifted lifted' ))
       else
         (* We lift possibly mutually recursive closures (that are created by
            contiguous statements) together. Isolated closures are lambda-lifted
@@ -102,15 +104,19 @@ let rec traverse var_depth (program, functions) pc depth =
           | Let (_, Closure _) :: _ -> false
           | _ -> true
         in
-        let rec rewrite_body current_contiguous st l =
+        let rec rewrite_body current_contiguous (st : Code.program * Code.instr list * Var.Set.t) l (*: _ * (_ * _ * Var.Set.t)*) =
           match l with
           | Let (f, (Closure (_, (pc', _)) as cl)) :: rem
             when List.is_empty current_contiguous && does_not_start_with_closure rem ->
               (* We lift an isolated closure *)
-              let program, functions =
+              Format.eprintf "@[<v>lifting isolated closure %s@,@]" (Var.to_string f);
+              let program, functions, lifted =
                 traverse var_depth st pc' (depth + 1)
               in
               let free_vars = collect_free_vars program var_depth (depth + 1) pc' in
+              Format.eprintf "@[<v>free variables:@,";
+              free_vars |> Var.Set.iter (fun v -> Format.eprintf "%s,@ " (Var.to_string v));
+              Format.eprintf "@]";
               let s =
                 Var.Set.fold
                   (fun x m -> Var.Map.add x (Var.fork x) m)
@@ -140,7 +146,8 @@ let rec traverse var_depth (program, functions) pc depth =
               let functions =
                 Let (f'', Closure (List.map s ~f:snd, (pc'', []))) :: functions
               in
-              let rem', st = rewrite_body [] (program, functions) rem in
+              let lifted = Var.Set.add f'' lifted in
+              let rem', st = rewrite_body [] (program, functions, lifted) rem in
               assert (
                 (not (List.is_empty rem'))
                 ||
@@ -227,7 +234,8 @@ let rec traverse var_depth (program, functions) pc depth =
                     Let (f_tuple, Closure (List.map s ~f:snd, (pc_tuple, [])))
                     :: functions
                   in
-                  let rem', st = rewrite_body [] (program, functions) rem in
+                  let lifted = Var.Set.add f_tuple lifted in
+                  let rem', st = rewrite_body [] (program, functions, lifted) rem in
                   assert (
                     not (List.is_empty rem')
                     || match block.branch with | Return _ -> false | _ -> true);
@@ -245,22 +253,23 @@ let rec traverse var_depth (program, functions) pc depth =
               end
           | [] -> [], st
         in
-        let body, (program, functions) =
-          rewrite_body [] (program, functions) block.body
+        let body, (program, functions, lifted) =
+          rewrite_body [] (program, functions, lifted) block.body
         in
         ( { program with blocks = Addr.Map.add pc { block with body } program.blocks }
-        , functions ))
+        , functions
+        , lifted ))
     pc
     program.blocks
-    (program, functions)
+    (program, functions, lifted)
 
 let f program =
   let t = Timer.make () in
   let nv = Var.count () in
   let var_depth = Array.make nv (-1) in
-  let program, functions =
-    traverse var_depth (program, []) program.start 0
+  let program, functions, lifted =
+    traverse var_depth (program, [], Var.Set.empty) program.start 0
   in
   assert (List.is_empty functions);
   if Debug.find "times" () then Format.eprintf "  lambda lifting: %a@." Timer.print t;
-  program
+  program, lifted
