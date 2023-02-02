@@ -206,7 +206,7 @@ let cps_last ~st (last : last) ~k : instr list * last =
         ]
       , Return ret )
 
-let cps_instr ~st:_ ~depth (instr : instr) : instr list * Var.t Var.Map.t =
+let cps_instr ~st:_ ~depth ~lifter_functions (instr : instr) : instr list * Var.t Var.Map.t =
   match instr with
   | Let (_c, Closure (_params, (_pc, _args))) when depth > 0 ->
       (*
@@ -237,6 +237,8 @@ let cps_instr ~st:_ ~depth (instr : instr) : instr list * Var.t Var.Map.t =
                 ) ]
           , Var.Map.empty )
       | _ -> assert false)
+  | Let (_, Apply { f; args = _; exact = true }) when Var.Set.mem f lifter_functions ->
+      [ instr ], Var.Map.empty
   | Let (_, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) ->
       assert false
   | _ -> ([ instr ], Var.Map.empty)
@@ -264,14 +266,11 @@ let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
 
   let rewrite_instr e =
     match e with
-    | Apply { f; args; exact } when not (Var.Set.mem f lifter_functions) ->
+    | Apply { f; args; exact } ->
         Some (fun ~x ~k ->
           let f_cps = Var.fresh () in
           [ Let (f_cps, Field (f, 1))
           ; Let (x, Apply { f = f_cps; args = args @ [ k ]; exact }) ])
-    | Apply { f = lifter_f; args; exact } ->
-        Some (fun ~x ~k:_ ->
-          [ Let (x, Apply { f = lifter_f; args = args; exact }) ])
     | Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ]) ->
         Some
           (fun ~x ~k ->
@@ -296,6 +295,10 @@ let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
 
   let rewritten_block =
     match List.split_last block.body, block.branch with
+    | Some (_, Let (_, Apply { f; args = _; exact = _ })), (Return _ | Branch _) when Var.Set.mem f lifter_functions ->
+        (* No need to construct a continuation as no effect can be performed
+           from a lifter function *)
+        None
     | Some (body_prefix, Let (x, e)), Return ret ->
         Option.map (rewrite_instr e) ~f:(fun instrs ->
             assert (List.is_empty alloc_jump_closures);
@@ -330,13 +333,13 @@ let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
     match rewritten_block with
     | Some (body_prefix, last_instrs, last) ->
         let instrs, subst =
-          concat_union (List.map body_prefix ~f:(fun i -> cps_instr ~st ~depth i))
+          concat_union (List.map body_prefix ~f:(fun i -> cps_instr ~st ~depth ~lifter_functions i))
         in
         instrs @ last_instrs, last, subst
     | None ->
         let last_instrs, last = cps_last ~st block.branch ~k in
         let body, subst =
-          concat_union (List.map block.body ~f:(fun i -> cps_instr ~st ~depth i))
+          concat_union (List.map block.body ~f:(fun i -> cps_instr ~st ~depth ~lifter_functions i))
         in
         let body = body @ alloc_jump_closures @ last_instrs in
         body, last, subst
@@ -419,12 +422,16 @@ let rewrite_direct_block ~st ~pc ~depth ~lifter_functions block =
           ; Let (x, Block (0, [| direct_c; cps_c |], NotArray)) ]
         , subst )
     | Let (x, Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ])) ->
-        (* Pass the identity as a continuation and call the CPS version of [f] *)
-        let k = Var.fresh () in
+        (* Pass the identity as a continuation and call the CPS version of [f].
+           We go through [caml_callback] to call it in order to install the
+           trampoline that CPS requires. *)
+        let k = Var.fresh_n "cont" in
+        let args = Var.fresh_n "args" in
         let f_cps = Var.fresh () in
         ( [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv st.ident_fn ]))
-          ; Let (f_cps, Field (f, 2))
-          ; Let (x, Apply { f = f_cps; args = [ arg; k ]; exact = false })
+          ; Let (f_cps, Field (f, 1))
+          ; Let (args, Prim (Extern "%js_array", [ Pv arg; Pv k ]))
+          ; Let (x, Prim (Extern "caml_callback", [ Pv f_cps; Pv args ]))
           ]
         , Var.Map.empty )
     | Let (x, Prim (Extern "%perform", [ Pv effect ])) ->
@@ -507,9 +514,13 @@ let f (p : Code.program) =
   lifter_functions |> Var.Set.iter (fun v -> Format.eprintf "%s,@ " (Var.to_string v));
   Format.eprintf "@]";
 
+  Format.eprintf "@[<v>After lambda lifting...@,";
+  Code.Print.program (fun _ _ -> "") p;
+  Format.eprintf "@]";
+
   let p = split_blocks p in
 
-  Format.eprintf "@[<v>After lambda lifting and block splitting...@,";
+  Format.eprintf "@[<v>After block splitting...@,";
   Code.Print.program (fun _ _ -> "") p;
   Format.eprintf "@]";
 
@@ -552,10 +563,10 @@ let f (p : Code.program) =
         free_pc
   in
   (* Define an identity function, needed for the boilerplate around "resume" *)
-  let ident_fn = Var.fresh () in
+  let ident_fn = Var.fresh_n "identity" in
   let id_pc, p =
     let blocks =
-      let id_arg = Var.fresh () in
+      let id_arg = Var.fresh_n "x" in
       Addr.Map.add
         p.free_pc
         { params = [ id_arg ]
@@ -763,23 +774,28 @@ let f (p : Code.program) =
   let all_blocks = Addr.Map.fold (fun a _ s -> Addr.Set.add a s) p.blocks Addr.Set.empty in
   let direct_blocks = Addr.Set.diff all_blocks cps_blocks in*)
 
-  (* Call [caml_callback] to set up the execution context. *)
+  (* FIXME wrong Call [caml_callback] to set up the execution context. *)
+  (* Define a global identity function. *)
   let new_start = p.free_pc in
   let blocks =
-    let id_arg = Var.fresh () in
-    let main = Var.fresh () in
-    let args = Var.fresh () in
-    let res = Var.fresh () in
+    let id_arg = Var.fresh_n "x" in
+    (*
+    let main = Var.fresh_n "main" in
+    let args = Var.fresh_n "args" in
+    let res = Var.fresh_n "res" in
+    *)
     Addr.Map.add
       new_start
       { params = []
       ; body =
           [ Let (ident_fn, Closure ([ id_arg ], (id_pc, [ id_arg ])))
+          (*
           ; Let (main, Closure ([], (p.start, [])))
           ; Let (args, Prim (Extern "%js_array", []))
           ; Let (res, Prim (Extern "caml_callback", [ Pv main; Pv args ]))
+          *)
           ]
-      ; branch = Return res
+      ; branch = Branch (p.start, [])
       }
       p.blocks
   in

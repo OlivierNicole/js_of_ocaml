@@ -91,7 +91,7 @@ function caml_call_gen_cps(f, args) {
 //If: effects
 //Weakdef
 function caml_call_gen(f, args) {
-  if (caml_fiber_stack.r.e === 0) // This is the topmost fiber: direct style
+  if (caml_fiber_stack.r.e) // This is the topmost fiber: direct style
   {
     return caml_call_gen_direct(f, args);
   } else {

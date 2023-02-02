@@ -148,25 +148,31 @@ let rec traverse var_depth (program, functions, lifted) pc depth : _ * _ * Var.S
               in
               let lifted = Var.Set.add f'' lifted in
               let rem', st = rewrite_body [] (program, functions, lifted) rem in
-              assert (
-                (not (List.is_empty rem'))
-                ||
-                match block.branch with
-                | Return _ -> false
-                | _ -> true);
               ( Let (f, Apply { f = f''; args = List.map ~f:fst s; exact = true })
                 :: rem'
               , st )
           | (Let (cname, Closure (params, (pc', args)))) :: rem ->
               let st = traverse var_depth st pc' (depth + 1) in
               rewrite_body ((cname, params, pc', args) :: current_contiguous) st rem
-          | i :: rem ->
+          | l ->
               assert (List.length current_contiguous <> 1);
               begin match current_contiguous with
               | [] ->
-                  let rem', st = rewrite_body [] st rem in
-                  i :: rem', st
+                  begin match l with
+                  | i :: rem ->
+                      let rem', st = rewrite_body [] st rem in
+                      i :: rem', st
+                  | [] -> [], st
+                  end
               | _ ->
+                  let program, functions, lifted =
+                    List.fold_left
+                      current_contiguous
+                      ~f:(fun st (_, _, pc, _) ->
+                        traverse var_depth st pc (depth + 1)
+                      )
+                      ~init:st
+                  in
                   let free_vars =
                     List.fold_left
                       current_contiguous
@@ -235,10 +241,13 @@ let rec traverse var_depth (program, functions, lifted) pc depth : _ * _ * Var.S
                     :: functions
                   in
                   let lifted = Var.Set.add f_tuple lifted in
-                  let rem', st = rewrite_body [] (program, functions, lifted) rem in
-                  assert (
-                    not (List.is_empty rem')
-                    || match block.branch with | Return _ -> false | _ -> true);
+                  let rem', st =
+                    match l with
+                    | i :: rem ->
+                        let rem', st = rewrite_body [] (program, functions, lifted) rem in
+                        i :: rem', st
+                    | [] -> [], (program, functions, lifted)
+                  in
                   ( let tuple = Var.fresh_n "tuple" in
                     Let
                       ( tuple
@@ -247,11 +256,9 @@ let rec traverse var_depth (program, functions, lifted) pc depth : _ * _ * Var.S
                          current_contiguous
                          ~f:(fun i (f,_,_,_) ->
                                Let (f, Field (tuple, i)))
-                    @ i
-                    :: rem'
+                    @ rem'
                   , st )
               end
-          | [] -> [], st
         in
         let body, (program, functions, lifted) =
           rewrite_body [] (program, functions, lifted) block.body
