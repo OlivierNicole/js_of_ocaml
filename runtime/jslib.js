@@ -89,7 +89,7 @@ function caml_callback(f,args) {
     caml_exn_stack = 0;
     caml_fiber_stack =
       {h:[0, 0, 0, uncaught_effect_handler], r:{k:0, x:0, e:0}};
-    var res = {joo_tramp: f,
+    var res = {joo_tramp: f[2],
                joo_args: args.concat(function (x){return x;})};
     do {
       caml_stack_depth = 40;

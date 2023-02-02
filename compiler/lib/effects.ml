@@ -423,15 +423,13 @@ let rewrite_direct_block ~st ~pc ~depth ~lifter_functions block =
         , subst )
     | Let (x, Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ])) ->
         (* Pass the identity as a continuation and call the CPS version of [f].
-           We go through [caml_callback] to call it in order to install the
+           This is actually done by [caml_callback], which also installs the
            trampoline that CPS requires. *)
         let k = Var.fresh_n "cont" in
         let args = Var.fresh_n "args" in
-        let f_cps = Var.fresh () in
         ( [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv st.ident_fn ]))
-          ; Let (f_cps, Field (f, 1))
-          ; Let (args, Prim (Extern "%js_array", [ Pv arg; Pv k ]))
-          ; Let (x, Prim (Extern "caml_callback", [ Pv f_cps; Pv args ]))
+          ; Let (args, Prim (Extern "%js_array", [ Pv arg ]))
+          ; Let (x, Prim (Extern "caml_callback", [ Pv f; Pv args ]))
           ]
         , Var.Map.empty )
     | Let (x, Prim (Extern "%perform", [ Pv effect ])) ->
