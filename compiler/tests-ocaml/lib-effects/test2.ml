@@ -1,29 +1,30 @@
 (* TEST
  *)
 
+open Printf
 open Effect
 open Effect.Deep
 
 type _ t += E : int -> int t
 
 let f () =
-  print_endline "perform effect (E 0)\n"; flush stdout;
+  printf "perform effect (E 0)\n%!";
   let v = perform (E 0) in
-  print_string "perform returns "; print_int v; print_newline (); flush stdout;
+  printf "perform returns %d\n%!" v;
   v + 1
 
 let h : type a. a t -> ((a, 'b) continuation -> 'b) option = function
   | E v -> Some (fun k ->
-      print_string "caught effect (E "; print_int v; print_string "). continuing..\n"; flush stdout;
+      printf "caught effect (E %d). continuing..\n%!" v;
       let v = continue k (v + 1) in
-      print_string "continue returns "; print_int v; print_string "\n"; flush stdout;
+      printf "continue returns %d\n%!" v;
       v + 1)
   | e -> None
 
 let v =
   match_with f ()
-  { retc = (fun v -> print_string "done "; print_int v; print_string "\n"; flush stdout; v + 1);
+  { retc = (fun v -> printf "done %d\n%!" v; v + 1);
     exnc = (fun e -> raise e);
     effc = h }
 
-let () = print_string "result="; print_int v; print_string "\n"; flush stdout
+let () = printf "result=%d\n%!" v

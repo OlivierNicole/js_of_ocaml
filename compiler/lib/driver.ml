@@ -95,7 +95,8 @@ let effects p =
   if Config.Flag.effects ()
   then (
     if debug () then Format.eprintf "Effects...@.";
-    print p |> Effects.f |> map_fst print (*|> inline |> deadcode |> phi |> flow |> fst (*|> Lambda_lifting.f*)*)
+    (if Debug.find "effects" () then print p else p)
+    |> Effects.f (*|> map_fst inline |> deadcode |> phi |> flow |> fst (*|> Lambda_lifting.f*)*)
   )
   else p, Code.Var.Set.empty
 

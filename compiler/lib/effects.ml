@@ -38,6 +38,12 @@
 open! Stdlib
 open Code
 
+let debug = Debug.find "effects"
+
+let debug_out fmt =
+  if debug () then Format.eprintf fmt
+  else Format.(ifprintf Format.err_formatter fmt)
+
 type graph =
   { succs : (Addr.t, Addr.Set.t) Hashtbl.t
   ; exn_handlers : (Addr.t, unit) Hashtbl.t
@@ -143,11 +149,11 @@ type st =
 let add_block st block =
   let blocks, free_pc = st.new_blocks in
   st.new_blocks <- Addr.Map.add free_pc block blocks, free_pc + 1;
-  Format.eprintf "add_block returns %d\n%!" free_pc;
+  debug_out "add_block returns %d\n%!" free_pc;
   free_pc
 
 let closure_of_pc ~st pc =
-  Format.eprintf "closure_of_pc %d\n%!" pc;
+  debug_out "closure_of_pc %d\n%!" pc;
   try Addr.Map.find pc st.jc.closure_of_jump with Not_found -> assert false
 
 let allocate_closure ~st ~params ~body ~branch =
@@ -252,7 +258,7 @@ let concat_union (l : ('a list * 'b Var.Map.t) list) : 'a list * 'b Var.Map.t =
     ~init:([], Var.Map.empty)
 
 let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
-  Format.eprintf "cps_block %d mapped to %d\n%!" orig_pc cps_pc;
+  debug_out "cps_block %d mapped to %d\n%!" orig_pc cps_pc;
   let alloc_jump_closures =
     match Addr.Map.find orig_pc st.jc.closures_of_alloc_site with
     | to_allocate ->
@@ -268,7 +274,7 @@ let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
     match e with
     | Apply { f; args; exact } ->
         Some (fun ~k ->
-          let f_cps = Var.fresh () in
+          let f_cps = Var.fork f in
           tail_call
             ~st
             ~instrs:[ Let (f_cps, Field (f, 1)) ]
@@ -277,11 +283,14 @@ let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
         Some
           (fun ~k ->
             let k' = Var.fresh_n "cont" in
+            let f_cps = Var.fork f in
             tail_call
               ~st
-              ~instrs:[ Let (k', Prim (Extern "caml_resume_stack", [ Pv stack; Pv k ])) ]
+              ~instrs:
+                [ Let (k', Prim (Extern "caml_resume_stack", [ Pv stack; Pv k ]))
+                ; Let (f_cps, Field (f, 1)) ]
               ~exact:false
-              ~f
+              ~f:f_cps
               [ arg; k' ])
     | Prim (Extern "%perform", [ Pv effect ]) ->
         Some
@@ -409,7 +418,7 @@ let split_blocks (p : Code.program) =
    pairs. Also rewrite the effect primitives to switch to the CPS versions of
    functions (for resume) or fail (for perform). *)
 let rewrite_direct_block ~st ~pc ~depth ~lifter_functions block =
-  Format.eprintf "@[<v>rewrite_direct %d, depth = %d@,@]%!" pc depth;
+  debug_out "@[<v>rewrite_direct %d, depth = %d@,@]%!" pc depth;
   let rewrite_instr = function
     | Let (x, Apply { f; args; exact }) when not (Var.Set.mem f lifter_functions) ->
         let f_direct = Var.fork f in
@@ -434,17 +443,16 @@ let rewrite_direct_block ~st ~pc ~depth ~lifter_functions block =
           ; Let (x, Block (0, [| direct_c; cps_c |], NotArray)) ]
         , subst )
     | Let (x, Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ])) ->
-        (* Pass the identity as a continuation and call the CPS version of [f]
-           (which requires a trampoline). *)
+        (* Pass the identity as a continuation and call the CPS version of [f].
+           We go through [caml_trampoline_cps] in order to install a trampoline
+         and handle exceptions. *)
         let k = Var.fresh_n "cont" in
         let f_cps = Var.fork f in
         let args = Var.fresh_n "args" in
-        let tramp = Var.fresh_n "tramp" in
         ( [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv st.ident_fn ]))
           ; Let (f_cps, Field (f, 1))
           ; Let (args, Prim (Extern "%js_array", [ Pv arg; Pv k ]))
-          ; Let (tramp, Prim (Extern "caml_trampoline_return", [ Pv f_cps; Pv args ]))
-          ; Let (x, Prim (Extern "caml_trampoline", [ Pv tramp ]))
+          ; Let (x, Prim (Extern "caml_trampoline_cps", [ Pv f_cps; Pv args ]))
           ]
         , Var.Map.empty )
     | Let (x, Prim (Extern "%perform", [ Pv effect ])) ->
@@ -508,13 +516,13 @@ let subst_bound_with_fresh ~block_subset ~add ~remove p =
   Addr.Map.mapi
     (fun pc block ->
       if Addr.Set.mem pc block_subset then begin
-        Format.eprintf "@[<v>block before subst: @,";
+        debug_out "@[<v>block before subst: @,";
         Code.Print.block (fun _ _ -> "") pc block;
-        Format.eprintf "@]";
+        debug_out "@]";
         let res = Subst.Bound.block s block in
-        Format.eprintf "@[<v>block after subst: @,";
+        debug_out "@[<v>block after subst: @,";
         Code.Print.block (fun _ _ -> "") pc res;
-        Format.eprintf "@]";
+        debug_out "@]";
         res
       end else block
       )
@@ -523,19 +531,19 @@ let subst_bound_with_fresh ~block_subset ~add ~remove p =
 
 let f (p : Code.program) =
   let p, lifter_functions = Lambda_lifting_simple.f p in
-  Format.eprintf "@[<v>Lifting closures:@,";
-  lifter_functions |> Var.Set.iter (fun v -> Format.eprintf "%s,@ " (Var.to_string v));
-  Format.eprintf "@]";
+  debug_out "@[<v>Lifting closures:@,";
+  lifter_functions |> Var.Set.iter (fun v -> debug_out "%s,@ " (Var.to_string v));
+  debug_out "@]";
 
-  Format.eprintf "@[<v>After lambda lifting...@,";
+  debug_out "@[<v>After lambda lifting...@,";
   Code.Print.program (fun _ _ -> "") p;
-  Format.eprintf "@]";
+  debug_out "@]";
 
   let p = split_blocks p in
 
-  Format.eprintf "@[<v>After block splitting...@,";
+  debug_out "@[<v>After block splitting...@,";
   Code.Print.program (fun _ _ -> "") p;
-  Format.eprintf "@]";
+  debug_out "@]";
 
   let toplevel_closures =
     Code.fold_closures_depth
@@ -549,9 +557,9 @@ let f (p : Code.program) =
       )
       Var.Set.empty
   in
-  Format.eprintf "@[<hv 2>Toplevel closures:@ ";
-  Var.Set.iter (fun v -> Format.eprintf "%s,@ " (Var.to_string v)) toplevel_closures;
-  Format.eprintf "@]";
+  debug_out "@[<hv 2>Toplevel closures:@ ";
+  Var.Set.iter (fun v -> debug_out "%s,@ " (Var.to_string v)) toplevel_closures;
+  debug_out "@]";
 
   let closure_continuation =
     (* Provide a name for the continuation of a closure (before CPS
@@ -595,12 +603,12 @@ let f (p : Code.program) =
     Code.fold_closures_depth
       p
       (fun ~depth cname _ (start, _) ({ blocks; free_pc; _ } as p, cps_blocks, direct_subst, cps_subst) ->
-        Option.iter cname ~f:(fun v -> Format.eprintf "cname = %s" @@ Var.to_string v);
+        Option.iter cname ~f:(fun v -> debug_out "cname = %s" @@ Var.to_string v);
         assert (depth <= 2); (* This should hold due to lambda lifting. *)
         (* If this a lifting closure, we don't CPS-translate it. We also
            don't need to CPS-translate the toplevel code (depth 0). *)
         if depth = 0 || match cname with Some f -> Var.Set.mem f lifter_functions | None -> false then begin
-          Format.eprintf "Adapting direct closure starting at %d ;    free_pc = %d" start free_pc;
+          debug_out "Adapting direct closure starting at %d ;    free_pc = %d" start free_pc;
           let cfg = build_graph blocks start in
           let closure_jc =
             let idom = dominator_tree cfg in
@@ -642,12 +650,12 @@ let f (p : Code.program) =
           let new_blocks, free_pc = st.new_blocks in
           assert (Addr.Map.is_empty new_blocks);
 
-          Format.eprintf "finished adapting direct closure %d ;      free_pc = %d" start free_pc;
+          debug_out "finished adapting direct closure %d ;      free_pc = %d" start free_pc;
           { p with blocks; free_pc }, cps_blocks, direct_subst, cps_subst
         end
         else begin
-          Format.eprintf "Translating closure starting at %d ;    " start;
-          Format.eprintf "free_pc = %d\n%!" free_pc;
+          debug_out "Translating closure starting at %d ;    " start;
+          debug_out "free_pc = %d\n%!" free_pc;
           let cfg = build_graph blocks start in
           let closure_jc =
             let idom = dominator_tree cfg in
@@ -684,18 +692,18 @@ let f (p : Code.program) =
             Code.traverse
               { fold = Code.fold_children }
               (fun pc (blocks, direct_subst, cps_subst) ->
-                Format.eprintf "running block translation function ;     ";
-                Format.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                debug_out "running block translation function ;     ";
+                debug_out "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
                 let s =
                   add_cps_translation
                     pc
                     (fun cps_pc ->
-                      Format.eprintf "inner block translation function ;      ";
-                      Format.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
-                      Format.eprintf "Translating block %d mapped to %d, depth = %d\n%!" pc (st.cps_pc_of_direct pc) depth;
+                      debug_out "inner block translation function ;      ";
+                      debug_out "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                      debug_out "Translating block %d mapped to %d, depth = %d\n%!" pc (st.cps_pc_of_direct pc) depth;
                       let res = cps_block ~st ~k ~lifter_functions ~orig_pc:pc ~cps_pc ~depth (Addr.Map.find pc blocks) in
-                      Format.eprintf "end of inner block translation function ;      ";
-                      Format.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                      debug_out "end of inner block translation function ;      ";
+                      debug_out "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
                       res
                     )
                 in
@@ -714,8 +722,8 @@ let f (p : Code.program) =
                    blocks
                 in
                 let direct_subst = Var.Map.union (fun _ _ -> assert false) direct_subst s in
-                Format.eprintf "finished translating block %d ;      " pc;
-                Format.eprintf "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                debug_out "finished translating block %d ;      " pc;
+                debug_out "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
                 res, direct_subst, cps_subst)
               start
               st.blocks
@@ -743,13 +751,13 @@ let f (p : Code.program) =
           let new_blocks =
             Addr.Map.mapi
               (fun pc block ->
-                Format.eprintf "@[<v>block before first subst: @,";
+                debug_out "@[<v>block before first subst: @,";
                 Code.Print.block (fun _ _ -> "") pc block;
-                Format.eprintf "@]";
+                debug_out "@]";
                 let res = Subst.Bound.block (Subst.from_map s) block in
-                Format.eprintf "@[<v>block after first subst: @,";
+                debug_out "@[<v>block after first subst: @,";
                 Code.Print.block (fun _ _ -> "") pc res;
-                Format.eprintf "@]";
+                debug_out "@]";
                 res
               )
               new_blocks
@@ -758,8 +766,8 @@ let f (p : Code.program) =
           st.cps_calls := Var.Set.map (Subst.from_map s) !(st.cps_calls);
 
           let blocks = Addr.Map.fold Addr.Map.add new_blocks blocks in
-          Format.eprintf "finished translating closure %d ;      " start;
-          Format.eprintf "free_pc = %d\n%!" free_pc;
+          debug_out "finished translating closure %d ;      " start;
+          debug_out "free_pc = %d\n%!" free_pc;
           { p with blocks; free_pc }, cps_blocks, direct_subst, cps_subst
         end)
       (p, Addr.Set.empty, Var.Map.empty, Var.Map.empty)
@@ -774,13 +782,13 @@ let f (p : Code.program) =
     Addr.Map.mapi
       (fun pc block ->
         if Addr.Set.mem pc cps_blocks then (
-          Format.eprintf "@[<v>block before second subst: @,";
-          Code.Print.block (fun _ _ -> "") pc block;
-          Format.eprintf "@]";
+          debug_out "@[<v>block before second subst: @,";
+          if debug () then Code.Print.block (fun _ _ -> "") pc block;
+          debug_out "@]";
           let res = Subst.Bound.block direct_subst block in
-          Format.eprintf "@[<v>block after second subst: @,";
-          Code.Print.block (fun _ _ -> "") pc res;
-          Format.eprintf "@]";
+          debug_out "@[<v>block after second subst: @,";
+          if debug () then Code.Print.block (fun _ _ -> "") pc res;
+          debug_out "@]";
           res
         ) else block
       )
@@ -799,6 +807,7 @@ let f (p : Code.program) =
   let new_start = p.free_pc in
   let blocks =
     let id_arg = Var.fresh_n "x" in
+    let dummy = Var.fresh_n "dummy" in
     (*
     let main = Var.fresh_n "main" in
     let args = Var.fresh_n "args" in
@@ -809,6 +818,7 @@ let f (p : Code.program) =
       { params = []
       ; body =
           [ Let (ident_fn, Closure ([ id_arg ], (id_pc, [ id_arg ])))
+          ; Let (dummy, Prim (Extern "caml_initialize_fiber_stack", []))
           (*
           ; Let (main, Closure ([], (p.start, [])))
           ; Let (args, Prim (Extern "%js_array", []))

@@ -61,8 +61,22 @@ function caml_push_trap(handler) {
 function caml_pop_trap() {
   if (!caml_exn_stack) return function(x){throw x;}
   var h = caml_exn_stack[1];
-  caml_exn_stack=caml_exn_stack[2];
+  caml_exn_stack=caml_exn_stack[2]
   return h
+}
+
+//Provides: uncaught_effect_handler
+//Requires: caml_named_value, caml_raise_constant, caml_raise_with_arg, caml_string_of_jsbytes, caml_fresh_oo_id, caml_resume_stack
+//If: effects
+function uncaught_effect_handler(eff,k,ms) {
+  // Resumes the continuation k by raising exception Unhandled.
+  caml_resume_stack(k[1],ms);
+  var exn = caml_named_value("Effect.Unhandled");
+  if(exn) caml_raise_with_arg(exn, eff);
+  else {
+    exn = [248,caml_string_of_jsbytes("Effect.Unhandled"), caml_fresh_oo_id(0)];
+    caml_raise_constant(exn);
+  }
 }
 
 //Provides: caml_fiber_stack
@@ -71,6 +85,13 @@ function caml_pop_trap() {
 // (see effect.js) and k, x and e are the saved continuation,
 // exception stack and fiber stack of the parent fiber.
 var caml_fiber_stack;
+
+//Provides: caml_initialize_fiber_stack
+//Requires: caml_fiber_stack, uncaught_effect_handler
+//If: effects
+function caml_initialize_fiber_stack() {
+  caml_fiber_stack = {h:[0, 0, 0, uncaught_effect_handler], r:{k:0, x:0, e:0}};
+}
 
 //Provides:caml_resume_stack
 //Requires: caml_named_value, caml_raise_constant, caml_exn_stack, caml_fiber_stack
@@ -187,4 +208,34 @@ function caml_ml_condition_signal(t){
 //!If: effects
 function jsoo_effect_not_supported(){
   caml_failwith("Effect handlers are not supported");
+}
+
+//Provides: caml_trampoline_cps
+//Requires:caml_stack_depth, caml_call_gen, caml_exn_stack, caml_fiber_stack, caml_wrap_exception
+//If: effects
+function caml_trampoline_cps(f, args) {
+  var saved_stack_depth = caml_stack_depth;
+  var saved_exn_stack = caml_exn_stack;
+  var saved_fiber_stack = caml_fiber_stack;
+  try {
+    var res = {joo_tramp: f, joo_args: args};
+    do {
+      caml_stack_depth = 40;
+      try {
+        res = caml_call_gen(res.joo_tramp, res.joo_args);
+      } catch (e) {
+        /* Handle exception coming from JavaScript or from the runtime. */
+        if (!caml_exn_stack.length) throw e;
+        var handler = caml_exn_stack[1];
+        caml_exn_stack = caml_exn_stack[2];
+        res = {joo_tramp: handler,
+               joo_args: [caml_wrap_exception(e)]};
+      }
+    } while(res && res.joo_args)
+  } finally {
+    caml_stack_depth = saved_stack_depth;
+    caml_exn_stack = saved_exn_stack;
+    caml_fiber_stack = saved_fiber_stack;
+  }
+  return res;
 }

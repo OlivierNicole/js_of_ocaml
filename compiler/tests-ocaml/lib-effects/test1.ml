@@ -7,7 +7,7 @@ open Effect.Deep
 type _ t += E : unit t
 
 let () =
-  print_int @@
+  Printf.printf "%d\n%!" @@
     try_with (fun x -> x) 10
     { effc = (fun (type a) (e : a t) ->
         match e with
