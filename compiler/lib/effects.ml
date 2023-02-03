@@ -434,14 +434,17 @@ let rewrite_direct_block ~st ~pc ~depth ~lifter_functions block =
           ; Let (x, Block (0, [| direct_c; cps_c |], NotArray)) ]
         , subst )
     | Let (x, Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ])) ->
-        (* Pass the identity as a continuation and call the CPS version of [f].
-           This is actually done by [caml_callback], which also installs the
-           trampoline that CPS requires. *)
+        (* Pass the identity as a continuation and call the CPS version of [f]
+           (which requires a trampoline). *)
         let k = Var.fresh_n "cont" in
+        let f_cps = Var.fork f in
         let args = Var.fresh_n "args" in
+        let tramp = Var.fresh_n "tramp" in
         ( [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv st.ident_fn ]))
-          ; Let (args, Prim (Extern "%js_array", [ Pv arg ]))
-          ; Let (x, Prim (Extern "caml_callback", [ Pv f; Pv args ]))
+          ; Let (f_cps, Field (f, 1))
+          ; Let (args, Prim (Extern "%js_array", [ Pv arg; Pv k ]))
+          ; Let (tramp, Prim (Extern "caml_trampoline_return", [ Pv f_cps; Pv args ]))
+          ; Let (x, Prim (Extern "caml_trampoline", [ Pv tramp ]))
           ]
         , Var.Map.empty )
     | Let (x, Prim (Extern "%perform", [ Pv effect ])) ->
@@ -608,7 +611,7 @@ let f (p : Code.program) =
             ; jc = closure_jc
             ; closure_continuation
             ; ident_fn
-            ; cps_pc_of_direct = fun pc -> cps_pc_of_direct ~st pc
+            ; cps_pc_of_direct = (fun pc -> cps_pc_of_direct ~st pc)
             ; cps_calls
             }
           in
@@ -655,7 +658,8 @@ let f (p : Code.program) =
             ; jc = closure_jc
             ; closure_continuation
             ; ident_fn
-            ; cps_pc_of_direct = fun pc -> cps_pc_of_direct ~st pc
+            ; cps_pc_of_direct = (fun pc -> cps_pc_of_direct ~st pc)
+            ; cps_calls
             }
           in
           let start_cps = st.cps_pc_of_direct start in
@@ -750,6 +754,8 @@ let f (p : Code.program) =
               )
               new_blocks
           in
+          (* Also apply susbstitution to set of CPS calls *)
+          st.cps_calls := Var.Set.map (Subst.from_map s) !(st.cps_calls);
 
           let blocks = Addr.Map.fold Addr.Map.add new_blocks blocks in
           Format.eprintf "finished translating closure %d ;      " start;
@@ -781,6 +787,8 @@ let f (p : Code.program) =
       p.blocks
   in
   let p = { p with blocks } in
+  (* Also apply susbstitution to set of CPS calls *)
+  cps_calls := Var.Set.map direct_subst !cps_calls;
 
   (*
   let all_blocks = Addr.Map.fold (fun a _ s -> Addr.Set.add a s) p.blocks Addr.Set.empty in
