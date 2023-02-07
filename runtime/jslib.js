@@ -53,7 +53,8 @@ function caml_trampoline_return(f,args) {
 
 //Provides:caml_stack_depth
 //If: effects
-var caml_stack_depth = 0;
+var caml_stack_depth = 10; // Initialized to a non-zero value in case of
+                           // unhandled effect
 
 //Provides:caml_stack_check_depth
 //If: effects

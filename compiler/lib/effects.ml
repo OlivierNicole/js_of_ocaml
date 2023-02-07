@@ -516,13 +516,17 @@ let subst_bound_with_fresh ~block_subset ~add ~remove p =
   Addr.Map.mapi
     (fun pc block ->
       if Addr.Set.mem pc block_subset then begin
-        debug_out "@[<v>block before subst: @,";
-        Code.Print.block (fun _ _ -> "") pc block;
-        debug_out "@]";
+        if debug () then begin
+          Format.eprintf "@[<v>block before subst: @,";
+          Code.Print.block (fun _ _ -> "") pc block;
+          Format.eprintf "@]";
+        end;
         let res = Subst.Bound.block s block in
-        debug_out "@[<v>block after subst: @,";
-        Code.Print.block (fun _ _ -> "") pc res;
-        debug_out "@]";
+        if debug () then begin
+          Format.eprintf "@[<v>block after subst: @,";
+          Code.Print.block (fun _ _ -> "") pc res;
+          Format.eprintf "@]";
+        end;
         res
       end else block
       )
@@ -531,25 +535,28 @@ let subst_bound_with_fresh ~block_subset ~add ~remove p =
 
 let f (p : Code.program) =
   let p, lifter_functions = Lambda_lifting_simple.f p in
-  debug_out "@[<v>Lifting closures:@,";
-  lifter_functions |> Var.Set.iter (fun v -> debug_out "%s,@ " (Var.to_string v));
-  debug_out "@]";
-
-  debug_out "@[<v>After lambda lifting...@,";
-  Code.Print.program (fun _ _ -> "") p;
-  debug_out "@]";
+  if debug () then begin
+    Format.eprintf "@[<v>Lifting closures:@,";
+    lifter_functions |> Var.Set.iter (fun v -> Format.eprintf "%s,@ " (Var.to_string v));
+    Format.eprintf "@]";
+    Format.eprintf "@[<v>After lambda lifting...@,";
+    Code.Print.program (fun _ _ -> "") p;
+    debug_out "@]";
+  end;
 
   let p = split_blocks p in
 
-  debug_out "@[<v>After block splitting...@,";
-  Code.Print.program (fun _ _ -> "") p;
-  debug_out "@]";
+  if debug () then begin
+    Format.eprintf "@[<v>After block splitting...@,";
+    Code.Print.program (fun _ _ -> "") p;
+    Format.eprintf "@]";
+  end;
 
   let toplevel_closures =
     Code.fold_closures_depth
       p
       (fun ~depth name _ _ toplevel_closures ->
-        Format.(eprintf "@[<v>fold_closures_depth function on %a, depth = %d@,@]" (pp_print_option (fun fmt v -> pp_print_string fmt (Var.to_string v))) name depth);
+        Format.(debug_out "@[<v>fold_closures_depth function on %a, depth = %d@,@]" (pp_print_option (fun fmt v -> pp_print_string fmt (Var.to_string v))) name depth);
         let open Var.Set in
         match depth, name with
         | 1, Some f -> add f toplevel_closures
@@ -557,9 +564,11 @@ let f (p : Code.program) =
       )
       Var.Set.empty
   in
-  debug_out "@[<hv 2>Toplevel closures:@ ";
-  Var.Set.iter (fun v -> debug_out "%s,@ " (Var.to_string v)) toplevel_closures;
-  debug_out "@]";
+  if debug () then begin
+    debug_out "@[<hv 2>Toplevel closures:@ ";
+    Var.Set.iter (fun v -> debug_out "%s,@ " (Var.to_string v)) toplevel_closures;
+    debug_out "@]";
+  end;
 
   let closure_continuation =
     (* Provide a name for the continuation of a closure (before CPS
@@ -751,13 +760,17 @@ let f (p : Code.program) =
           let new_blocks =
             Addr.Map.mapi
               (fun pc block ->
-                debug_out "@[<v>block before first subst: @,";
-                Code.Print.block (fun _ _ -> "") pc block;
-                debug_out "@]";
+                if debug () then begin
+                  debug_out "@[<v>block before first subst: @,";
+                  Code.Print.block (fun _ _ -> "") pc block;
+                  debug_out "@]";
+                end;
                 let res = Subst.Bound.block (Subst.from_map s) block in
-                debug_out "@[<v>block after first subst: @,";
-                Code.Print.block (fun _ _ -> "") pc res;
-                debug_out "@]";
+                if debug () then begin
+                  debug_out "@[<v>block after first subst: @,";
+                  Code.Print.block (fun _ _ -> "") pc res;
+                  debug_out "@]";
+                end;
                 res
               )
               new_blocks
@@ -782,13 +795,17 @@ let f (p : Code.program) =
     Addr.Map.mapi
       (fun pc block ->
         if Addr.Set.mem pc cps_blocks then (
-          debug_out "@[<v>block before second subst: @,";
-          if debug () then Code.Print.block (fun _ _ -> "") pc block;
-          debug_out "@]";
+          if debug () then begin
+            debug_out "@[<v>block before second subst: @,";
+            if debug () then Code.Print.block (fun _ _ -> "") pc block;
+            debug_out "@]";
+          end;
           let res = Subst.Bound.block direct_subst block in
-          debug_out "@[<v>block after second subst: @,";
-          if debug () then Code.Print.block (fun _ _ -> "") pc res;
-          debug_out "@]";
+          if debug () then begin
+            debug_out "@[<v>block after second subst: @,";
+            if debug () then Code.Print.block (fun _ _ -> "") pc res;
+            debug_out "@]";
+          end;
           res
         ) else block
       )

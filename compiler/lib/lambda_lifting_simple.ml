@@ -109,14 +109,18 @@ let rec traverse var_depth (program, functions, lifted) pc depth : _ * _ * Var.S
           | Let (f, (Closure (_, (pc', _)) as cl)) :: rem
             when List.is_empty current_contiguous && does_not_start_with_closure rem ->
               (* We lift an isolated closure *)
-              Format.eprintf "@[<v>lifting isolated closure %s@,@]" (Var.to_string f);
+              if debug () then
+                Format.eprintf "@[<v>lifting isolated closure %s@,@]" (Var.to_string f);
               let program, functions, lifted =
                 traverse var_depth st pc' (depth + 1)
               in
               let free_vars = collect_free_vars program var_depth (depth + 1) pc' in
-              Format.eprintf "@[<v>free variables:@,";
-              free_vars |> Var.Set.iter (fun v -> Format.eprintf "%s,@ " (Var.to_string v));
-              Format.eprintf "@]";
+              if debug () then begin
+                Format.eprintf "@[<v>free variables:@,";
+                free_vars
+                |> Var.Set.iter (fun v -> Format.eprintf "%s,@ " (Var.to_string v));
+                Format.eprintf "@]";
+              end;
               let s =
                 Var.Set.fold
                   (fun x m -> Var.Map.add x (Var.fork x) m)

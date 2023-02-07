@@ -17,10 +17,12 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
-//Provides: caml_call_gen_direct
-function caml_call_gen_direct(f, args) {
+//Provides: caml_call_gen (const, shallow)
+//If: !effects
+//Weakdef
+function caml_call_gen(f, args) {
   if(f.fun)
-    return caml_call_gen_direct(f.fun, args);
+    return caml_call_gen(f.fun, args);
   //FIXME, can happen with too many arguments
   if(typeof f !== "function") return f;
   var n = f.length | 0;
@@ -30,7 +32,7 @@ function caml_call_gen_direct(f, args) {
   if (d == 0)
     return f.apply(null, args);
   else if (d < 0) {
-    return caml_call_gen_direct(f.apply(null,args.slice(0,n)),args.slice(n));
+    return caml_call_gen(f.apply(null,args.slice(0,n)),args.slice(n));
   }
   else {
     return function (){
@@ -38,60 +40,96 @@ function caml_call_gen_direct(f, args) {
       var nargs = new Array(args.length+extra_args);
       for(var i = 0; i < args.length; i++ ) nargs[i] = args[i];
       for(var i = 0; i < arguments.length; i++ ) nargs[args.length+i] = arguments[i];
-      return caml_call_gen_direct(f, nargs)
+      return caml_call_gen(f, nargs)
     }
   }
 }
 
 //Provides: caml_call_gen (const, shallow)
-//Requires: caml_call_gen_direct
-//If: !effects
+//Requires: caml_fiber_stack
+//If: effects
 //Weakdef
 function caml_call_gen(f, args) {
-  return caml_call_gen_direct(f, args);
-}
-
-//Provides: caml_call_gen_cps
-//If: effects
-function caml_call_gen_cps(f, args) {
-  if (f.fun)
-    return caml_call_gen_cps(f.fun, args);
-  if (typeof f !== "function") return args[args.length-1](f);
-  var n = f.length | 0;
-  if (n === 0) return f.apply(null, args);
-  var argsLen = args.length | 0;
-  var d = n - argsLen | 0;
-  if (d == 0) {
-    return f.apply(null, args);
-  } else if (d < 0) {
-    var rest = args.slice(n - 1);
-    var k = args [argsLen - 1];
-    args = args.slice(0, n);
-    args[n - 1] = function (g) {
-      var args = rest.slice();
-      args[args.length - 1] = k;
-      return caml_call_gen_cps(g, args); };
-    return f.apply(null, args);
-  } else {
-    argsLen--;
-    var k = args [argsLen];
-    return k (function () {
-      var extra_args = (arguments.length == 0)?1:arguments.length;
-      var nargs = new Array(argsLen + extra_args);
-      for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
-      for(var i = 0; i < arguments.length; i++ )
-        nargs[argsLen + i] = arguments[i];
-      return caml_call_gen_cps(f, nargs)
-    });
+  function caml_call_gen_direct(f, args) {
+    if(f.fun)
+      return caml_call_gen_direct(f.fun, args);
+    //FIXME, can happen with too many arguments
+    if(typeof f !== "function") return f;
+    var n = f.length | 0;
+    if(n === 0) return f.apply(null,args);
+    var argsLen = args.length | 0;
+    var d = n - argsLen | 0;
+    if (d == 0)
+      return f.apply(null, args);
+    else if (d < 0) {
+      return caml_call_gen_direct(f.apply(null,args.slice(0,n)),args.slice(n));
+    }
+    else {
+      return [
+        0,
+        function (){
+          var extra_args = (arguments.length == 0)?1:arguments.length;
+          var nargs = new Array(args.length+extra_args);
+          for(var i = 0; i < args.length; i++ ) nargs[i] = args[i];
+          for(var i = 0; i < arguments.length; i++ ) nargs[args.length+i] = arguments[i];
+          return caml_call_gen_direct(f, nargs)
+        },
+        function (cont) {
+          var extra_args = (arguments.length == 0)?1:arguments.length;
+          var nargs = new Array(argsLen + extra_args + 1);
+          for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
+          for(var i = 0; i < arguments.length; i++ )
+            nargs[argsLen + i] = arguments[i];
+          nargs[argsLen + extra_args] = cont;
+          return caml_call_gen_cps(f, nargs)
+        }
+      ];
+    }
   }
-}
-//
-//Provides: caml_call_gen (const, shallow)
-//Requires: caml_call_gen_direct, caml_call_gen_cps, caml_fiber_stack
-//If: effects
-//Weakdef
-function caml_call_gen(f, args) {
-  if (caml_fiber_stack.r.e) // This is the topmost fiber: direct style
+
+  function caml_call_gen_cps(f, args) {
+    if (f.fun)
+      return caml_call_gen_cps(f.fun, args);
+    if (typeof f !== "function") return args[args.length-1](f);
+    var n = f.length | 0;
+    if (n === 0) return f.apply(null, args);
+    var argsLen = args.length | 0;
+    var d = n - argsLen | 0;
+    if (d == 0) {
+      return f.apply(null, args);
+    } else if (d < 0) {
+      var rest = args.slice(n - 1);
+      var k = args [argsLen - 1];
+      args = args.slice(0, n);
+      args[n - 1] = function (g) {
+        var args = rest.slice();
+        args[args.length - 1] = k;
+        return caml_call_gen_cps(g, args); };
+      return f.apply(null, args);
+    } else {
+      argsLen--;
+      var k = args [argsLen];
+      return k (
+        [ 0,
+          function (){
+            var extra_args = (arguments.length == 0)?1:arguments.length;
+            var nargs = new Array(args.length+extra_args);
+            for(var i = 0; i < args.length; i++ ) nargs[i] = args[i];
+            for(var i = 0; i < arguments.length; i++ ) nargs[args.length+i] = arguments[i];
+            return caml_call_gen_direct(f, nargs)
+          },
+          function () {
+            var extra_args = (arguments.length == 0)?1:arguments.length;
+            var nargs = new Array(argsLen + extra_args);
+            for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
+            for(var i = 0; i < arguments.length; i++ )
+              nargs[argsLen + i] = arguments[i];
+            return caml_call_gen_cps(f, nargs)
+          } ]);
+    }
+  }
+
+  if (caml_fiber_stack.r.e === 0) // This is the topmost fiber: direct style
   {
     return caml_call_gen_direct(f, args);
   } else {
