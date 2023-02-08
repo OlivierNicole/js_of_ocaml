@@ -214,28 +214,19 @@ function jsoo_effect_not_supported(){
 //Requires:caml_stack_depth, caml_call_gen, caml_exn_stack, caml_fiber_stack, caml_wrap_exception
 //If: effects
 function caml_trampoline_cps(f, args) {
-  var saved_stack_depth = caml_stack_depth;
-  var saved_exn_stack = caml_exn_stack;
-  var saved_fiber_stack = caml_fiber_stack;
-  try {
-    var res = {joo_tramp: f, joo_args: args};
-    do {
-      caml_stack_depth = 40;
-      try {
-        res = caml_call_gen(res.joo_tramp, res.joo_args);
-      } catch (e) {
-        /* Handle exception coming from JavaScript or from the runtime. */
-        if (!caml_exn_stack.length) throw e;
-        var handler = caml_exn_stack[1];
-        caml_exn_stack = caml_exn_stack[2];
-        res = {joo_tramp: handler,
-               joo_args: [caml_wrap_exception(e)]};
-      }
-    } while(res && res.joo_args)
-  } finally {
-    caml_stack_depth = saved_stack_depth;
-    caml_exn_stack = saved_exn_stack;
-    caml_fiber_stack = saved_fiber_stack;
-  }
+  var res = {joo_tramp: f, joo_args: args};
+  do {
+    caml_stack_depth = 40;
+    try {
+      res = caml_call_gen(res.joo_tramp, res.joo_args);
+    } catch (e) {
+      /* Handle exception coming from JavaScript or from the runtime. */
+      if (!caml_exn_stack.length) throw e;
+      var handler = caml_exn_stack[1];
+      caml_exn_stack = caml_exn_stack[2];
+      res = {joo_tramp: handler,
+             joo_args: [caml_wrap_exception(e)]};
+    }
+  } while(res && res.joo_args)
   return res;
 }
