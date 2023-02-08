@@ -66,7 +66,7 @@ let collect_free_vars program var_depth depth pc =
   !vars
 
 let mark_bound_variables var_depth block depth =
-  Freevars.iter_block_bound_vars (fun x -> var_depth.(Var.idx x) <- depth) block;
+  Freevars.iter_block_bound_vars (fun x -> Format.eprintf "marking %s@," (Var.to_string x); var_depth.(Var.idx x) <- depth) block;
   List.iter block.body ~f:(fun i ->
       match i with
       | Let (_, Closure (params, _)) ->
@@ -78,6 +78,9 @@ let rec traverse var_depth (program, functions, lifted) pc depth : _ * _ * Var.S
     { fold = Code.fold_children }
     (fun pc (program, functions, lifted) ->
       let block = Code.Addr.Map.find pc program.blocks in
+      Format.eprintf "@[<v>Iterating on block:@,";
+      Code.Print.block (fun _ _ -> "") pc block;
+      Format.eprintf "@,@]";
       mark_bound_variables var_depth block depth;
       if depth = 0
       then (
@@ -170,6 +173,10 @@ let rec traverse var_depth (program, functions, lifted) pc depth : _ * _ * Var.S
                   end
               | _ ->
                   let program, functions, lifted =
+                    if debug () then
+                      Format.(eprintf "@[<v>Need to lift:@,%a@,@]"
+                        (pp_print_list ~pp_sep:pp_print_space pp_print_string)
+                        (List.map ~f:(fun (f,_,_,_) -> Code.Var.to_string f) current_contiguous));
                     List.fold_left
                       current_contiguous
                       ~f:(fun st (_, _, pc, _) ->
@@ -275,6 +282,11 @@ let rec traverse var_depth (program, functions, lifted) pc depth : _ * _ * Var.S
     (program, functions, lifted)
 
 let f program =
+  if debug () then begin
+    Format.eprintf "@[<v>Program before lambda lifting:@,";
+    Code.Print.program (fun _ _ -> "") program;
+    Format.eprintf "@]";
+  end;
   let t = Timer.make () in
   let nv = Var.count () in
   let var_depth = Array.make nv (-1) in

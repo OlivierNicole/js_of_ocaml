@@ -7,7 +7,7 @@
    (:standard -w -38))
   (js_of_ocaml
    (flags
-    (:standard --enable effects --noinline))
+    (:standard --enable effects --noinline --debug lifting_simple,main))
    ;; separate compilation doesn't work when using
    ;; features such as 'effects' or 'use-js-string'
    ;; because dune doesn't know that it should compile

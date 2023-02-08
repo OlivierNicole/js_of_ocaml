@@ -7,11 +7,11 @@ open Effect.Deep
 type _ t += Peek : int t
 type _ t += Poke : unit t
 
-let rec a i = perform Peek + Random.int i
-let rec b i = a i + Random.int i
-let rec c i = b i + Random.int i
+let a i = perform Peek + Random.int i
+let b i = a i + Random.int i
+let c i = b i + Random.int i
 
-let rec d i =
+let d i =
   Random.int i +
   try_with c i
   { effc = fun (type a) (e : a t) ->
@@ -19,7 +19,7 @@ let rec d i =
       | Poke -> Some (fun (k : (a,_) continuation) -> continue k ())
       | _ -> None }
 
-let rec e i =
+let e i =
   Random.int i +
   try_with d i
   { effc = fun (type a) (e : a t) ->
