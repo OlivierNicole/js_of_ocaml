@@ -66,7 +66,11 @@ let collect_free_vars program var_depth depth pc =
   !vars
 
 let mark_bound_variables var_depth block depth =
-  Freevars.iter_block_bound_vars (fun x -> Format.eprintf "marking %s@," (Var.to_string x); var_depth.(Var.idx x) <- depth) block;
+  Freevars.iter_block_bound_vars
+    (fun x ->
+      let idx = Var.idx x in
+      if idx < Array.length var_depth then var_depth.(idx) <- depth)
+    block;
   List.iter block.body ~f:(fun i ->
       match i with
       | Let (_, Closure (params, _)) ->
@@ -78,9 +82,6 @@ let rec traverse var_depth (program, functions, lifted) pc depth : _ * _ * Var.S
     { fold = Code.fold_children }
     (fun pc (program, functions, lifted) ->
       let block = Code.Addr.Map.find pc program.blocks in
-      Format.eprintf "@[<v>Iterating on block:@,";
-      Code.Print.block (fun _ _ -> "") pc block;
-      Format.eprintf "@,@]";
       mark_bound_variables var_depth block depth;
       if depth = 0
       then (
