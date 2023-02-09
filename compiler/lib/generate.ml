@@ -912,7 +912,7 @@ let apply_fun_raw ctx f params exact cps =
         ( J.EBin (J.EqEq, J.EDot (f, "length"), int n)
         , apply_directly
         , ecall
-            (runtime_fun ctx "caml_call_gen")
+            (runtime_fun ctx (if cps then "caml_call_gen_cps" else "caml_call_gen"))
             [ f; J.EArr (List.map params ~f:(fun x -> Some x)) ]
             J.N )
   in

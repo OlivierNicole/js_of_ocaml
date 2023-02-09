@@ -45,72 +45,29 @@ function caml_call_gen(f, args) {
   }
 }
 
-//Provides: caml_call_gen (const, shallow)
+//Provides: caml_call_gen_tuple (const, shallow)
 //Requires: caml_fiber_stack
 //If: effects
 //Weakdef
-function caml_call_gen(f, args) {
-  function caml_call_gen_direct(f, args) {
-    if(f.fun)
-      return caml_call_gen_direct(f.fun, args);
-    //FIXME, can happen with too many arguments
-    if(typeof f !== "function") return f;
-    var n = f.length | 0;
-    if(n === 0) return f.apply(null,args);
-    var argsLen = args.length | 0;
-    var d = n - argsLen | 0;
-    if (d == 0)
-      return f.apply(null, args);
-    else if (d < 0) {
-      return caml_call_gen_direct(f.apply(null,args.slice(0,n)),args.slice(n));
-    }
-    else {
-      return [
-        0,
-        function (){
-          var extra_args = (arguments.length == 0)?1:arguments.length;
-          var nargs = new Array(args.length+extra_args);
-          for(var i = 0; i < args.length; i++ ) nargs[i] = args[i];
-          for(var i = 0; i < arguments.length; i++ ) nargs[args.length+i] = arguments[i];
-          return caml_call_gen_direct(f, nargs)
-        },
-        function (cont) {
-          var extra_args = (arguments.length == 0)?1:arguments.length;
-          var nargs = new Array(argsLen + extra_args + 1);
-          for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
-          for(var i = 0; i < arguments.length; i++ )
-            nargs[argsLen + i] = arguments[i];
-          nargs[argsLen + extra_args] = cont;
-          return caml_call_gen_cps(f, nargs)
-        }
-      ];
-    }
-  }
-
-  function caml_call_gen_cps(f, args) {
-    if (f.fun)
-      return caml_call_gen_cps(f.fun, args);
-    if (typeof f !== "function") return args[args.length-1](f);
-    var n = f.length | 0;
-    if (n === 0) return f.apply(null, args);
-    var argsLen = args.length | 0;
-    var d = n - argsLen | 0;
-    if (d == 0) {
-      return f.apply(null, args);
-    } else if (d < 0) {
-      var rest = args.slice(n - 1);
-      var k = args [argsLen - 1];
-      args = args.slice(0, n);
-      args[n - 1] = function (g) {
-        var args = rest.slice();
-        args[args.length - 1] = k;
-        return caml_call_gen_cps(g, args); };
-      return f.apply(null, args);
-    } else {
-      argsLen--;
-      var k = args [argsLen];
-      return k (
-        [ 0,
+var caml_call_gen_tuple = (
+  function() {
+    function caml_call_gen_direct(f, args) {
+      if(f.fun)
+        return caml_call_gen_direct(f.fun, args);
+      //FIXME, can happen with too many arguments
+      if(typeof f !== "function") return f;
+      var n = f.length | 0;
+      if(n === 0) return f.apply(null,args);
+      var argsLen = args.length | 0;
+      var d = n - argsLen | 0;
+      if (d == 0)
+        return f.apply(null, args);
+      else if (d < 0) {
+        return caml_call_gen_direct(f.apply(null,args.slice(0,n))[1],args.slice(n));
+      }
+      else {
+        return [
+          0,
           function (){
             var extra_args = (arguments.length == 0)?1:arguments.length;
             var nargs = new Array(args.length+extra_args);
@@ -118,24 +75,72 @@ function caml_call_gen(f, args) {
             for(var i = 0; i < arguments.length; i++ ) nargs[args.length+i] = arguments[i];
             return caml_call_gen_direct(f, nargs)
           },
-          function () {
+          function (cont) {
             var extra_args = (arguments.length == 0)?1:arguments.length;
-            var nargs = new Array(argsLen + extra_args);
+            var nargs = new Array(argsLen + extra_args + 1);
             for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
             for(var i = 0; i < arguments.length; i++ )
               nargs[argsLen + i] = arguments[i];
+            nargs[argsLen + extra_args] = cont;
             return caml_call_gen_cps(f, nargs)
-          } ]);
+          }
+        ];
+      }
     }
-  }
+    function caml_call_gen_cps(f, args) {
+      if (f.fun)
+        return caml_call_gen_cps(f.fun, args);
+      if (typeof f !== "function") return args[args.length-1](f);
+      var n = f.length | 0;
+      if (n === 0) return f.apply(null, args);
+      var argsLen = args.length | 0;
+      var d = n - argsLen | 0;
+      if (d == 0) {
+        return f.apply(null, args);
+      } else if (d < 0) {
+        var rest = args.slice(n - 1);
+        var k = args [argsLen - 1];
+        args = args.slice(0, n);
+        args[n - 1] = function (g) {
+          var args = rest.slice();
+          args[args.length - 1] = k;
+          return caml_call_gen_cps(g[2], args); };
+        return f.apply(null, args);
+      } else {
+        argsLen--;
+        var k = args [argsLen];
+        return k (
+          [ 0,
+            function (){
+              var extra_args = (arguments.length == 0)?1:arguments.length;
+              var nargs = new Array(args.length+extra_args);
+              for(var i = 0; i < args.length; i++ ) nargs[i] = args[i];
+              for(var i = 0; i < arguments.length; i++ ) nargs[args.length+i] = arguments[i];
+              return caml_call_gen_direct(f, nargs)
+            },
+            function () {
+              var extra_args = (arguments.length == 0)?1:arguments.length;
+              var nargs = new Array(argsLen + extra_args);
+              for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
+              for(var i = 0; i < arguments.length; i++ )
+                nargs[argsLen + i] = arguments[i];
+              return caml_call_gen_cps(f, nargs)
+            } ]);
+      }
+    }
+    return [caml_call_gen_direct, caml_call_gen_cps]
+  })()
 
-  if (caml_fiber_stack.r.e === 0) // This is the topmost fiber: direct style
-  {
-    return caml_call_gen_direct(f, args);
-  } else {
-    return caml_call_gen_cps(f, args);
-  }
-}
+//Provides: caml_call_gen
+//Requires: caml_call_gen_tuple
+//If: effects
+var caml_call_gen = caml_call_gen_tuple[0];
+
+//Provides: caml_call_gen_cps
+//Requires: caml_call_gen_tuple
+//If: effects
+var caml_call_gen_cps = caml_call_gen_tuple[1];
+
 
 //Provides: caml_named_values
 var caml_named_values = {};

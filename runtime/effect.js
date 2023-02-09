@@ -141,20 +141,20 @@ function caml_perform_effect(eff, cont, k0) {
 }
 
 //Provides: caml_alloc_stack
-//Requires: caml_pop_fiber, caml_fiber_stack, caml_call_gen
+//Requires: caml_pop_fiber, caml_fiber_stack, caml_call_gen_cps
 //If: effects
 function caml_alloc_stack(hv, hx, hf) {
   function hval(x) {
     // Call [hv] in the parent fiber
     var f=caml_fiber_stack.h[1];
     var k=caml_pop_fiber();
-    return caml_call_gen(f, [x, k]);
+    return caml_call_gen_cps(f, [x, k]);
   }
   function hexn(e) {
     // Call [hx] in the parent fiber
     var f=caml_fiber_stack.h[2];
     var k=caml_pop_fiber();
-    return caml_call_gen(f, [e, k]);
+    return caml_call_gen_cps(f, [e, k]);
   }
   return [0, hval, [0, hexn, 0], [0, hv[2], hx[2], hf[2]], 0];
 }
@@ -176,7 +176,7 @@ function caml_continuation_use_noexc(cont) {
 //Requires: caml_continuation_use_noexc
 function caml_continuation_use_and_update_handler_noexc(cont, hval, hexn, heff) {
   var stack = caml_continuation_use_noexc(cont);
-  stack[3] = [0, hval, hexn, heff];
+  stack[3] = [0, hval[2], hexn[2], heff[2]];
   return stack;
 }
 
@@ -211,14 +211,14 @@ function jsoo_effect_not_supported(){
 }
 
 //Provides: caml_trampoline_cps
-//Requires:caml_stack_depth, caml_call_gen, caml_exn_stack, caml_fiber_stack, caml_wrap_exception
+//Requires:caml_stack_depth, caml_call_gen_cps, caml_exn_stack, caml_fiber_stack, caml_wrap_exception
 //If: effects
 function caml_trampoline_cps(f, args) {
   var res = {joo_tramp: f, joo_args: args};
   do {
     caml_stack_depth = 40;
     try {
-      res = caml_call_gen(res.joo_tramp, res.joo_args);
+      res = caml_call_gen_cps(res.joo_tramp, res.joo_args);
     } catch (e) {
       /* Handle exception coming from JavaScript or from the runtime. */
       if (!caml_exn_stack.length) throw e;
