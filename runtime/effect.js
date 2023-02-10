@@ -90,7 +90,7 @@ var caml_fiber_stack;
 //Requires: caml_fiber_stack, uncaught_effect_handler
 //If: effects
 function caml_initialize_fiber_stack() {
-  caml_fiber_stack = {h:[0, 0, 0, uncaught_effect_handler], r:{k:0, x:0, e:0}};
+  caml_fiber_stack = {h:[0, 0, 0, [0, 0, uncaught_effect_handler]], r:{k:0, x:0, e:0}};
 }
 
 //Provides:caml_resume_stack
@@ -136,7 +136,7 @@ function caml_perform_effect(eff, cont, k0) {
   // Move to parent fiber and execute the effect handler there
   // The handler is defined in Stdlib.Effect, so we know that the arity matches
   var k1 = caml_pop_fiber();
-  return caml_stack_check_depth()?handler(eff,cont,k1,k1)
+  return caml_stack_check_depth()?handler[2](eff,cont,k1,k1)
          :caml_trampoline_return(handler,[eff,cont,k1,k1]);
 }
 
@@ -156,7 +156,7 @@ function caml_alloc_stack(hv, hx, hf) {
     var k=caml_pop_fiber();
     return caml_call_gen_cps(f, [e, k]);
   }
-  return [0, hval, [0, hexn, 0], [0, hv[2], hx[2], hf[2]], 0];
+  return [0, hval, [0, hexn, 0], [0, hv, hx, hf], 0];
 }
 
 //Provides: caml_alloc_stack
@@ -176,7 +176,7 @@ function caml_continuation_use_noexc(cont) {
 //Requires: caml_continuation_use_noexc
 function caml_continuation_use_and_update_handler_noexc(cont, hval, hexn, heff) {
   var stack = caml_continuation_use_noexc(cont);
-  stack[3] = [0, hval[2], hexn[2], heff[2]];
+  stack[3] = [0, hval, hexn, heff];
   return stack;
 }
 
@@ -214,6 +214,7 @@ function jsoo_effect_not_supported(){
 //Requires:caml_stack_depth, caml_call_gen_cps, caml_exn_stack, caml_fiber_stack, caml_wrap_exception
 //If: effects
 function caml_trampoline_cps(f, args) {
+  /* Note: f is not an ordinary function but a (direct-style, CPS) closure pair */
   var res = {joo_tramp: f, joo_args: args};
   do {
     caml_stack_depth = 40;

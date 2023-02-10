@@ -23,6 +23,7 @@ val f :
   -> exported_runtime:bool
   -> live_vars:int array
   -> cps_calls:Effects.cps_calls
+  -> lifter_functions:Effects.lifter_functions
   -> should_export:bool
   -> Parse_bytecode.Debug.t
   -> Javascript.program

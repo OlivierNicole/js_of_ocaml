@@ -6,9 +6,9 @@
   (js_of_ocaml
    (compilation_mode separate)
    (flags
-    (:standard --enable effects))
+    (:standard --enable effects --pretty))
    (build_runtime_flags
-    (:standard --enable effects))))
+    (:standard --enable effects --pretty))))
  (bench_no_debug
   (flags
    (:standard \ -g))

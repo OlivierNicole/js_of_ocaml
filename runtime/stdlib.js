@@ -54,16 +54,17 @@ var caml_call_gen_tuple = (
     function caml_call_gen_direct(f, args) {
       if(f.fun)
         return caml_call_gen_direct(f.fun, args);
+      var fdir = f[1];
       //FIXME, can happen with too many arguments
-      if(typeof f !== "function") return f;
-      var n = f.length | 0;
-      if(n === 0) return f.apply(null,args);
+      if(typeof fdir !== "function") return fdir;
+      var n = fdir.length | 0;
+      if(n === 0) return fdir.apply(null,args);
       var argsLen = args.length | 0;
       var d = n - argsLen | 0;
       if (d == 0)
-        return f.apply(null, args);
+        return fdir.apply(null, args);
       else if (d < 0) {
-        return caml_call_gen_direct(f.apply(null,args.slice(0,n))[1],args.slice(n));
+        return caml_call_gen_direct(fdir.apply(null,args.slice(0,n)),args.slice(n));
       }
       else {
         return [
@@ -75,14 +76,13 @@ var caml_call_gen_tuple = (
             for(var i = 0; i < arguments.length; i++ ) nargs[args.length+i] = arguments[i];
             return caml_call_gen_direct(f, nargs)
           },
-          function (cont) {
+          function () {
             var extra_args = (arguments.length == 0)?1:arguments.length;
-            var nargs = new Array(argsLen + extra_args + 1);
+            var nargs = new Array(argsLen + extra_args);
             for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
-            for(var i = 0; i < arguments.length; i++ )
-              nargs[argsLen + i] = arguments[i];
-            nargs[argsLen + extra_args] = cont;
-            return caml_call_gen_cps(f, nargs)
+            for(var i = 0; i < arguments.length; i++ ) nargs[argsLen+i] = arguments[i];
+            var cont = nargs[argsLen + extra_args - 1];
+            return caml_call_gen_cps(f, nargs);
           }
         ];
       }
@@ -90,13 +90,14 @@ var caml_call_gen_tuple = (
     function caml_call_gen_cps(f, args) {
       if (f.fun)
         return caml_call_gen_cps(f.fun, args);
-      if (typeof f !== "function") return args[args.length-1](f);
-      var n = f.length | 0;
-      if (n === 0) return f.apply(null, args);
+      var fcps = f[2];
+      if (typeof fcps !== "function") return args[args.length-1](f);
+      var n = fcps.length | 0;
+      if (n === 0) return fcps.apply(null, args);
       var argsLen = args.length | 0;
       var d = n - argsLen | 0;
       if (d == 0) {
-        return f.apply(null, args);
+        return fcps.apply(null, args);
       } else if (d < 0) {
         var rest = args.slice(n - 1);
         var k = args [argsLen - 1];
@@ -104,8 +105,8 @@ var caml_call_gen_tuple = (
         args[n - 1] = function (g) {
           var args = rest.slice();
           args[args.length - 1] = k;
-          return caml_call_gen_cps(g[2], args); };
-        return f.apply(null, args);
+          return caml_call_gen_cps(g, args); };
+        return fcps.apply(null, args);
       } else {
         argsLen--;
         var k = args [argsLen];
@@ -122,8 +123,7 @@ var caml_call_gen_tuple = (
               var extra_args = (arguments.length == 0)?1:arguments.length;
               var nargs = new Array(argsLen + extra_args);
               for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
-              for(var i = 0; i < arguments.length; i++ )
-                nargs[argsLen + i] = arguments[i];
+              for(var i = 0; i < arguments.length; i++ ) nargs[argsLen+i] = arguments[i];
               return caml_call_gen_cps(f, nargs)
             } ]);
       }

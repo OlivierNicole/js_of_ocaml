@@ -71,6 +71,7 @@ type application_description =
   { arity : int
   ; exact : bool
   ; cps : bool
+  ; lifter : bool
   }
 
 module Share = struct
@@ -135,6 +136,7 @@ module Share = struct
 
   let get
       ~cps_calls
+      ~lifter_functions
       ?alias_strings
       ?(alias_prims = false)
       ?(alias_apply = true)
@@ -152,8 +154,9 @@ module Share = struct
               | Let (_, Constant c) -> get_constant c share
               | Let (x, Apply { args; exact; _ }) ->
                   let cps = Var.Set.mem x cps_calls in
+                  let lifter = Var.Set.mem x lifter_functions in
                   if (not exact) || cps
-                  then add_apply { arity = List.length args; exact; cps } share
+                  then add_apply { arity = List.length args; exact; cps; lifter } share
                   else share
               | Let (_, Prim (Extern "%closure", [ Pc (NativeString name) ])) ->
                   let name = Primitive.resolve name in
@@ -228,15 +231,18 @@ module Share = struct
       try J.EVar (AppMap.find desc t.vars.applies)
       with Not_found ->
         let x =
-          let { arity; exact; cps } = desc in
+          let { arity; exact; cps; lifter } = desc in
           Var.fresh_n
             (Printf.sprintf
                "caml_%scall%d"
-               (match exact, cps with
-               | true, false -> assert false
-               | true, true -> "cps_exact_"
-               | false, false -> ""
-               | false, true -> "cps_")
+               (match exact, cps, lifter with
+               | true, false, false -> "exact_"
+               | true, false, true -> ""
+               | true, true, false -> "cps_exact_"
+               | true, true, true -> "cps_exact_mono_"
+               | false, false, false -> ""
+               | false, true, false -> "cps_"
+               | _, _, true -> assert false)
                arity)
         in
         let v = J.V x in
@@ -254,6 +260,7 @@ module Ctx = struct
     ; should_export : bool
     ; effect_warning : bool ref
     ; cps_calls : Effects.cps_calls
+    ; lifter_functions : Effects.lifter_functions
     }
 
   let initial
@@ -262,6 +269,7 @@ module Ctx = struct
       blocks
       live
       cps_calls
+      lifter_functions
       share
       debug =
     { blocks
@@ -272,6 +280,7 @@ module Ctx = struct
     ; should_export
     ; effect_warning = ref false
     ; cps_calls
+    ; lifter_functions
     }
 end
 
@@ -899,18 +908,24 @@ let parallel_renaming params args continuation queue =
 
 (****)
 
-let apply_fun_raw ctx f params exact cps =
+let apply_fun_raw ctx f params exact cps lifter =
   let n = List.length params in
-  let apply_directly = ecall f params J.N in
-  let apply =
+  let apply_directly cps lifter =
+    if lifter then begin
+      ecall f params J.N
+    end else
+      let idx = J.(ENum (Num.of_int32 (if cps then 2l else 1l))) in
+      ecall (J.EAccess (f, idx)) params J.N
+  in
+  let apply cps lifter =
     (* We skip the arity check when we know that we have the right
        number of parameters, since this test is expensive. *)
     if exact
-    then apply_directly
+    then apply_directly cps lifter
     else
       J.ECond
         ( J.EBin (J.EqEq, J.EDot (f, "length"), int n)
-        , apply_directly
+        , apply_directly cps lifter
         , ecall
             (runtime_fun ctx (if cps then "caml_call_gen_cps" else "caml_call_gen"))
             [ f; J.EArr (List.map params ~f:(fun x -> Some x)) ]
@@ -923,16 +938,22 @@ let apply_fun_raw ctx f params exact cps =
        optimization. To implement it, we check the stack depth and
        bounce to a trampoline if needed, to avoid a stack overflow.
        The trampoline then performs the call in an shorter stack. *)
+    let f =
+      if lifter then
+        let zero = J.(ENum (Num.of_int32 0l)) in
+        J.(EArr [ Some zero; Some zero; Some f ])
+      else f
+    in
     J.ECond
       ( ecall (runtime_fun ctx "caml_stack_check_depth") [] J.N
-      , apply
+      , apply cps lifter
       , ecall
           (runtime_fun ctx "caml_trampoline_return")
           [ f; J.EArr (List.map params ~f:(fun x -> Some x)) ]
           J.N ))
-  else apply
+  else apply cps lifter
 
-let generate_apply_fun ctx { arity; exact; cps } =
+let generate_apply_fun ctx { arity; exact; cps; lifter } =
   let f' = Var.fresh_n "f" in
   let f = J.V f' in
   let params =
@@ -946,25 +967,25 @@ let generate_apply_fun ctx { arity; exact; cps } =
   J.EFun
     ( None
     , f :: params
-    , [ ( J.Statement (J.Return_statement (Some (apply_fun_raw ctx f' params' exact cps)))
+    , [ ( J.Statement (J.Return_statement (Some (apply_fun_raw ctx f' params' exact cps lifter)))
         , J.N )
       ]
     , J.N )
 
-let apply_fun ctx f params exact cps loc =
+let apply_fun ctx f params exact cps lifter loc =
   (* We always go through an intermediate function when doing CPS
      calls. This function first checks the stack depth to prevent
      a stack overflow. This makes the code smaller than inlining
      the test, and we expect the performance impact to be low
      since the function should get inlined by the JavaScript
      engines. *)
-  if Config.Flag.inline_callgen () || (exact && not cps)
-  then apply_fun_raw ctx f params exact cps
+  if Config.Flag.inline_callgen ()
+  then apply_fun_raw ctx f params exact cps lifter
   else
     let y =
       Share.get_apply
         (generate_apply_fun ctx)
-        { arity = List.length params; exact; cps }
+        { arity = List.length params; exact; cps; lifter }
         ctx.Ctx.share
     in
     ecall y (f :: params) loc
@@ -1138,6 +1159,10 @@ let rec translate_expr ctx queue loc x e level : _ * J.statement_list =
   match e with
   | Apply { f; args; exact } ->
       let cps = Var.Set.mem x ctx.Ctx.cps_calls in
+      let lifter = Var.Set.mem f ctx.Ctx.lifter_functions in
+      if debug () then begin
+        Format.eprintf "@[<v>@[<hov 2>Apply %s;@ exact = %B;@ lifter = %B@]@,@]" (Var.to_string f) cps lifter;
+      end;
       let args, prop, queue =
         List.fold_right
           ~f:(fun x (args, prop, queue) ->
@@ -1148,7 +1173,7 @@ let rec translate_expr ctx queue loc x e level : _ * J.statement_list =
       in
       let (prop', f), queue = access_queue queue f in
       let prop = or_p prop prop' in
-      let e = apply_fun ctx f args exact cps loc in
+      let e = apply_fun ctx f args exact cps lifter loc in
       (e, prop, queue), []
   | Block (tag, a, array_or_not) ->
       let contents, prop, queue =
@@ -2043,10 +2068,19 @@ let f
     ~exported_runtime
     ~live_vars
     ~cps_calls
+    ~lifter_functions
     ~should_export
-    debug =
+    debug' =
+  if debug () then begin
+    Format.eprintf "@[<v>Lifting closures:@,";
+    lifter_functions |> Var.Set.iter (fun v -> Format.eprintf "%s,@ " (Var.to_string v));
+    Format.eprintf "@]";
+    Format.eprintf "@[<v>After lambda lifting...@,";
+    Code.Print.program (fun _ _ -> "") p;
+    Format.eprintf "@]";
+  end;
   let t' = Timer.make () in
-  let share = Share.get ~cps_calls ~alias_prims:exported_runtime p in
+  let share = Share.get ~cps_calls ~lifter_functions ~alias_prims:exported_runtime p in
   let exported_runtime =
     if exported_runtime then Some (Code.Var.fresh_n "runtime", ref false) else None
   in
@@ -2057,8 +2091,9 @@ let f
       p.blocks
       live_vars
       cps_calls
+      lifter_functions
       share
-      debug
+      debug'
   in
   dominance_frontier_time := 0.;
   let p = compile_program ctx p.start in

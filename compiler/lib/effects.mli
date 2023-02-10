@@ -18,4 +18,7 @@
 
 type cps_calls = Code.Var.Set.t
 
-val f : Code.program -> Code.program * cps_calls
+(* FIXME rename into "direct-only functions" or something similar, "lifter" is no longer accurate *)
+type lifter_functions = Code.Var.Set.t
+
+val f : Code.program -> Code.program * cps_calls * lifter_functions

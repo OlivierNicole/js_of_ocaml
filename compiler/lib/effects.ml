@@ -136,6 +136,8 @@ let jump_closures g idom : jump_closures =
 
 type cps_calls = Var.Set.t
 
+type lifter_functions = Var.Set.t
+
 type st =
   { mutable new_blocks : Code.block Addr.Map.t * Code.Addr.t
   ; blocks : Code.block Addr.Map.t
@@ -144,6 +146,7 @@ type st =
   ; cps_pc_of_direct : Addr.t -> Addr.t
   ; ident_fn : Var.t
   ; cps_calls : cps_calls ref
+  ; direct_only_functions : lifter_functions ref
   }
 
 let add_block st block =
@@ -162,12 +165,13 @@ let allocate_closure ~st ~params ~body ~branch =
   let name = Var.fresh () in
   [ Let (name, Closure (params, (pc, []))) ], name
 
-let tail_call ~st ?(instrs = []) ~exact ~f args =
+let tail_call ~st ?(instrs = []) ?(direct_only = false) ~exact ~f args =
   let ret = Var.fresh () in
   st.cps_calls := Var.Set.add ret !(st.cps_calls);
+  if direct_only then st.direct_only_functions := Var.Set.add f !(st.direct_only_functions);
   instrs @ [ Let (ret, Apply { f; args; exact }) ], Return ret
 
-let cps_branch ~st (pc, args) = tail_call ~st ~exact:true ~f:(closure_of_pc ~st pc) args
+let cps_branch ~st (pc, args) = tail_call ~st ~exact:true ~direct_only:true ~f:(closure_of_pc ~st pc) args
 
 let cps_jump_cont ~st cont =
   let call_block =
@@ -178,7 +182,7 @@ let cps_jump_cont ~st cont =
 
 let cps_last ~st (last : last) ~k : instr list * last =
   match last with
-  | Return x -> tail_call ~st ~exact:true ~f:k [ x ]
+  | Return x -> tail_call ~st ~exact:true ~f:k ~direct_only:true [ x ]
   | Raise (x, _) ->
       let exn_handler = Var.fresh_n "raise" in
       tail_call
@@ -257,7 +261,7 @@ let concat_union (l : ('a list * 'b Var.Map.t) list) : 'a list * 'b Var.Map.t =
         )
     ~init:([], Var.Map.empty)
 
-let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
+let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc (* FIXME remove cps_pc argument *) block =
   debug_out "cps_block %d mapped to %d\n%!" orig_pc cps_pc;
   let alloc_jump_closures =
     match Addr.Map.find orig_pc st.jc.closures_of_alloc_site with
@@ -274,23 +278,19 @@ let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
     match e with
     | Apply { f; args; exact } ->
         Some (fun ~k ->
-          let f_cps = Var.fork f in
           tail_call
             ~st
-            ~instrs:[ Let (f_cps, Field (f, 1)) ]
-            ~exact ~f:f_cps (args @ [ k ]))
+            ~exact ~f (args @ [ k ]))
     | Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ]) ->
         Some
           (fun ~k ->
             let k' = Var.fresh_n "cont" in
-            let f_cps = Var.fork f in
             tail_call
               ~st
               ~instrs:
-                [ Let (k', Prim (Extern "caml_resume_stack", [ Pv stack; Pv k ]))
-                ; Let (f_cps, Field (f, 1)) ]
+                [ Let (k', Prim (Extern "caml_resume_stack", [ Pv stack; Pv k ])) ; ]
               ~exact:false
-              ~f:f_cps
+              ~f
               [ arg; k' ])
     | Prim (Extern "%perform", [ Pv effect ]) ->
         Some
@@ -337,7 +337,7 @@ let cps_block ~st ~k ~depth ~lifter_functions ~orig_pc ~cps_pc block =
             let pc, args = cont in
             let f' = closure_of_pc ~st pc in
             let body, branch =
-              tail_call ~st ~instrs:alloc_jump_closures ~exact:true ~f:f' args
+              tail_call ~st ~instrs:alloc_jump_closures ~exact:true ~f:f' ~direct_only:true args
             in
             allocate_closure ~st ~params:[ x ] ~body ~branch
           in
@@ -421,9 +421,7 @@ let rewrite_direct_block ~st ~pc ~depth ~lifter_functions block =
   debug_out "@[<v>rewrite_direct %d, depth = %d@,@]%!" pc depth;
   let rewrite_instr = function
     | Let (x, Apply { f; args; exact }) when not (Var.Set.mem f lifter_functions) ->
-        let f_direct = Var.fork f in
-        ( [ Let (f_direct, Field (f, 0))
-          ; Let (x, Apply { f = f_direct; args; exact }) ]
+        ( [ Let (x, Apply { f; args; exact }) ]
         , Var.Map.empty )
     | Let (x, Closure (params, (pc, args))) when not (Var.Set.mem x lifter_functions) ->
         let direct_c = Var.fork x in
@@ -447,12 +445,10 @@ let rewrite_direct_block ~st ~pc ~depth ~lifter_functions block =
            We go through [caml_trampoline_cps] in order to install a trampoline
          and handle exceptions. *)
         let k = Var.fresh_n "cont" in
-        let f_cps = Var.fork f in
         let args = Var.fresh_n "args" in
         ( [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv st.ident_fn ]))
-          ; Let (f_cps, Field (f, 1))
           ; Let (args, Prim (Extern "%js_array", [ Pv arg; Pv k ]))
-          ; Let (x, Prim (Extern "caml_trampoline_cps", [ Pv f_cps; Pv args ]))
+          ; Let (x, Prim (Extern "caml_trampoline_cps", [ Pv f; Pv args ]))
           ]
         , Var.Map.empty )
     | Let (x, Prim (Extern "%perform", [ Pv effect ])) ->
@@ -608,10 +604,11 @@ let f (p : Code.program) =
     p.free_pc, { start = p.start; blocks; free_pc = p.free_pc + 1 }
   in
   let cps_calls = ref Var.Set.empty in
-  let p, cps_blocks, direct_subst, _cps_subst =
+  let direct_only_functions = ref lifter_functions in
+  let p, cps_blocks, direct_subst =
     Code.fold_closures_depth
       p
-      (fun ~depth cname _ (start, _) ({ blocks; free_pc; _ } as p, cps_blocks, direct_subst, cps_subst) ->
+      (fun ~depth cname _ (start, _) ({ blocks; free_pc; _ } as p, cps_blocks, direct_subst) ->
         Option.iter cname ~f:(fun v -> debug_out "cname = %s" @@ Var.to_string v);
         assert (depth <= 2); (* This should hold due to lambda lifting. *)
         (* If this a lifting closure, we don't CPS-translate it. We also
@@ -630,6 +627,7 @@ let f (p : Code.program) =
             ; ident_fn
             ; cps_pc_of_direct = (fun pc -> cps_pc_of_direct ~st pc)
             ; cps_calls
+            ; direct_only_functions
             }
           in
           let blocks, direct_subst =
@@ -660,7 +658,7 @@ let f (p : Code.program) =
           assert (Addr.Map.is_empty new_blocks);
 
           debug_out "finished adapting direct closure %d ;      free_pc = %d" start free_pc;
-          { p with blocks; free_pc }, cps_blocks, direct_subst, cps_subst
+          { p with blocks; free_pc }, cps_blocks, direct_subst
         end
         else begin
           debug_out "Translating closure starting at %d ;    " start;
@@ -677,18 +675,17 @@ let f (p : Code.program) =
             ; ident_fn
             ; cps_pc_of_direct = (fun pc -> cps_pc_of_direct ~st pc)
             ; cps_calls
+            ; direct_only_functions
             }
           in
           let start_cps = st.cps_pc_of_direct start in
-          let add_cps_translation direct_addr (mk_block : Addr.t -> block * Var.t Var.Map.t)
-                : Var.t Var.Map.t =
+          let add_cps_translation direct_addr (mk_block : Addr.t -> block) : unit =
               (* Add the block as a side effect, and return the variable
                  substitution created by the block-making function *)
               let cps_pc = st.cps_pc_of_direct direct_addr in
-              let new_block, subst = mk_block cps_pc in
+              let new_block = mk_block cps_pc in
               let new_blocks, free_pc = st.new_blocks in
               st.new_blocks <- Addr.Map.add cps_pc new_block new_blocks, free_pc;
-              subst
           in
           let k = closure_continuation start_cps in
           (* For every block in the closure,
@@ -697,26 +694,23 @@ let f (p : Code.program) =
                 to take into account the fact that closure are turned into
                 (direct style closure, CPS closure) pairs, and modify uses of the
                 %resume and %perform primitives. *)
-          let blocks, direct_subst, cps_subst =
+          let blocks, direct_subst =
             Code.traverse
               { fold = Code.fold_children }
-              (fun pc (blocks, direct_subst, cps_subst) ->
+              (fun pc (blocks, direct_subst) ->
                 debug_out "running block translation function ;     ";
                 debug_out "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
-                let s =
-                  add_cps_translation
-                    pc
-                    (fun cps_pc ->
-                      debug_out "inner block translation function ;      ";
-                      debug_out "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
-                      debug_out "Translating block %d mapped to %d, depth = %d\n%!" pc (st.cps_pc_of_direct pc) depth;
-                      let res = cps_block ~st ~k ~lifter_functions ~orig_pc:pc ~cps_pc ~depth (Addr.Map.find pc blocks) in
-                      debug_out "end of inner block translation function ;      ";
-                      debug_out "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
-                      res
-                    )
-                in
-                let cps_subst = Var.Map.union (fun _ _ -> assert false) cps_subst s in
+                add_cps_translation
+                  pc
+                  (fun cps_pc ->
+                    debug_out "inner block translation function ;      ";
+                    debug_out "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                    debug_out "Translating block %d mapped to %d, depth = %d\n%!" pc (st.cps_pc_of_direct pc) depth;
+                    let res, _ = cps_block ~st ~k ~lifter_functions ~orig_pc:pc ~cps_pc ~depth (Addr.Map.find pc blocks) in
+                    debug_out "end of inner block translation function ;      ";
+                    debug_out "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
+                    res
+                  );
                 let new_direct_block, s =
                   rewrite_direct_block
                     ~st
@@ -733,10 +727,10 @@ let f (p : Code.program) =
                 let direct_subst = Var.Map.union (fun _ _ -> assert false) direct_subst s in
                 debug_out "finished translating block %d ;      " pc;
                 debug_out "free_pc = %d\n%!" @@ snd @@ st.new_blocks;
-                res, direct_subst, cps_subst)
+                res, direct_subst)
               start
               st.blocks
-              (st.blocks, direct_subst, cps_subst)
+              (st.blocks, direct_subst)
           in
           let new_blocks, free_pc = st.new_blocks in
           let cps_blocks =
@@ -775,15 +769,17 @@ let f (p : Code.program) =
               )
               new_blocks
           in
-          (* Also apply susbstitution to set of CPS calls *)
-          st.cps_calls := Var.Set.map (Subst.from_map s) !(st.cps_calls);
+          (* Also apply susbstitution to set of CPS calls and lifter functions *)
+          let s = Subst.from_map s in
+          st.cps_calls := Var.Set.map s !(st.cps_calls);
+          st.direct_only_functions := Var.Set.map s !(st.direct_only_functions);
 
           let blocks = Addr.Map.fold Addr.Map.add new_blocks blocks in
           debug_out "finished translating closure %d ;      " start;
           debug_out "free_pc = %d\n%!" free_pc;
-          { p with blocks; free_pc }, cps_blocks, direct_subst, cps_subst
+          { p with blocks; free_pc }, cps_blocks, direct_subst
         end)
-      (p, Addr.Set.empty, Var.Map.empty, Var.Map.empty)
+      (p, Addr.Set.empty, Var.Map.empty)
   in
 
   (* All variables that were a closure parameter in a direct-style block must
@@ -812,8 +808,9 @@ let f (p : Code.program) =
       p.blocks
   in
   let p = { p with blocks } in
-  (* Also apply susbstitution to set of CPS calls *)
+  (* Also apply susbstitution to set of CPS calls and lifter functions *)
   cps_calls := Var.Set.map direct_subst !cps_calls;
+  direct_only_functions := Var.Set.map direct_subst !direct_only_functions;
 
   (*
   let all_blocks = Addr.Map.fold (fun a _ s -> Addr.Set.add a s) p.blocks Addr.Set.empty in
@@ -846,7 +843,7 @@ let f (p : Code.program) =
       }
       p.blocks
   in
-  { start = new_start; blocks; free_pc = new_start + 1 }, !cps_calls
+  { start = new_start; blocks; free_pc = new_start + 1 }, !cps_calls, !direct_only_functions
 
 let f p =
   let t = Timer.make () in
