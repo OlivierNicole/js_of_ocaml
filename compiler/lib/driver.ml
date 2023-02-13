@@ -94,7 +94,9 @@ let effects p =
   then (
     if debug () then Format.eprintf "Effects...@.";
     (if Debug.find "effects" () then print p else p)
-    |> Effects.f (*|> map_fst inline |> deadcode |> phi |> flow |> fst (*|> Lambda_lifting.f*)*)
+    |> Effects.f
+    |> (fun (p, b, c) ->
+          (inline p |> deadcode |> phi |> flow |> fst (*|> Lambda_lifting.f*)), b, c)
   )
   else p, Code.Var.Set.empty, Code.Var.Set.empty
 

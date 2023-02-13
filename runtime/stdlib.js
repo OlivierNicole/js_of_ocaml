@@ -114,9 +114,9 @@ var caml_call_gen_tuple = (
           [ 0,
             function (){
               var extra_args = (arguments.length == 0)?1:arguments.length;
-              var nargs = new Array(args.length+extra_args);
-              for(var i = 0; i < args.length; i++ ) nargs[i] = args[i];
-              for(var i = 0; i < arguments.length; i++ ) nargs[args.length+i] = arguments[i];
+              var nargs = new Array(argsLen+extra_args);
+              for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
+              for(var i = 0; i < arguments.length; i++ ) nargs[argsLen+i] = arguments[i];
               return caml_call_gen_direct(f, nargs)
             },
             function () {

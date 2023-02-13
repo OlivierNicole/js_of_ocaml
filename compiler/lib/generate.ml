@@ -910,23 +910,27 @@ let parallel_renaming params args continuation queue =
 
 let apply_fun_raw ctx f params exact cps lifter =
   let n = List.length params in
-  let apply_directly cps lifter =
-    if lifter then begin
-      ecall f params J.N
-    end else
-      let idx = J.(ENum (Num.of_int32 (if cps then 2l else 1l))) in
-      ecall (J.EAccess (f, idx)) params J.N
+  let apply_directly f params =
+    ecall f params J.N
   in
   let apply cps lifter =
+    (* Adapt if [f] is a (direct-style, CPS) closure pair *)
+    let real_closure =
+      if lifter then f
+      else
+        let idx = J.(ENum (Num.of_int32 (if cps then 2l else 1l))) in
+        J.EAccess (f, idx)
+    in
     (* We skip the arity check when we know that we have the right
        number of parameters, since this test is expensive. *)
     if exact
-    then apply_directly cps lifter
+    then apply_directly real_closure params
     else
       J.ECond
-        ( J.EBin (J.EqEq, J.EDot (f, "length"), int n)
-        , apply_directly cps lifter
+        ( J.EBin (J.EqEq, J.EDot (real_closure, "length"), int n)
+        , apply_directly real_closure params
         , ecall
+            (* Note that [caml_call_gen*] take a pair of closures *)
             (runtime_fun ctx (if cps then "caml_call_gen_cps" else "caml_call_gen"))
             [ f; J.EArr (List.map params ~f:(fun x -> Some x)) ]
             J.N )

@@ -366,13 +366,13 @@
    %{target}
    (run node ./test_lazy.bc.js))))
 
-;(rule
-; (alias runtest)
-; (enabled_if
-;  (>= %{ocaml_version} 5))
-; (deps test_lazy.reference test_lazy.referencejs)
-; (action
-;  (diff test_lazy.reference test_lazy.referencejs)))
+(rule
+ (alias runtest)
+ (enabled_if
+  (>= %{ocaml_version} 5))
+ (deps test_lazy.reference test_lazy.referencejs)
+ (action
+  (diff test_lazy.reference test_lazy.referencejs)))
 
 (rule
  (target unhandled_unlinked.referencejs)

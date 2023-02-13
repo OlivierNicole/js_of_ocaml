@@ -59,10 +59,10 @@ function caml_push_trap(handler) {
 //Requires: caml_exn_stack
 //If: effects
 function caml_pop_trap() {
-  if (!caml_exn_stack) return function(x){throw x;}
+  if (!caml_exn_stack) return [0, 0, function(x){throw x;}]
   var h = caml_exn_stack[1];
   caml_exn_stack=caml_exn_stack[2]
-  return h
+  return [0, 0, h]
 }
 
 //Provides: uncaught_effect_handler
@@ -225,7 +225,7 @@ function caml_trampoline_cps(f, args) {
       if (!caml_exn_stack.length) throw e;
       var handler = caml_exn_stack[1];
       caml_exn_stack = caml_exn_stack[2];
-      res = {joo_tramp: handler,
+      res = {joo_tramp: [0, 0, handler],
              joo_args: [caml_wrap_exception(e)]};
     }
   } while(res && res.joo_args)
