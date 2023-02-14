@@ -236,13 +236,14 @@ module Share = struct
             (Printf.sprintf
                "caml_%scall%d"
                (match exact, cps, lifter with
-               | true, false, false -> "exact_"
-               | true, false, true -> ""
                | true, true, false -> "cps_exact_"
                | true, true, true -> "cps_exact_mono_"
                | false, false, false -> ""
                | false, true, false -> "cps_"
-               | _, _, true -> assert false)
+               | true, false, _
+               | _, false, true
+               | false, true, true -> assert false
+               )
                arity)
         in
         let v = J.V x in
@@ -916,7 +917,7 @@ let apply_fun_raw ctx f params exact cps lifter =
   let apply cps lifter =
     (* Adapt if [f] is a (direct-style, CPS) closure pair *)
     let real_closure =
-      if lifter then f
+      if not (Config.Flag.effects ()) || lifter then f
       else
         let idx = J.(ENum (Num.of_int32 (if cps then 2l else 1l))) in
         J.EAccess (f, idx)
@@ -983,7 +984,7 @@ let apply_fun ctx f params exact cps lifter loc =
      the test, and we expect the performance impact to be low
      since the function should get inlined by the JavaScript
      engines. *)
-  if Config.Flag.inline_callgen ()
+  if Config.Flag.inline_callgen () || (exact && not cps)
   then apply_fun_raw ctx f params exact cps lifter
   else
     let y =
