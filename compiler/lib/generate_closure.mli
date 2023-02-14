@@ -20,4 +20,4 @@
 
 open Code
 
-val f : program -> program
+val f : program -> program * Effects.lifter_functions

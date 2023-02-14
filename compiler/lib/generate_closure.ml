@@ -287,6 +287,7 @@ let rewrite_mutable
     blocks
     mutated_vars
     rewrite_list
+    lifter_closures
     { int = closures_intern; ext = closures_extern } =
   let internal_and_external = closures_intern @ closures_extern in
   assert (not (List.is_empty closures_extern));
@@ -307,7 +308,7 @@ let rewrite_mutable
   in
   let vars = Var.Set.elements (Var.Set.diff all_mut names) in
   if List.is_empty vars
-  then free_pc, blocks, internal_and_external
+  then free_pc, blocks, internal_and_external, Var.Set.empty
   else
     match internal_and_external with
     | [ Let (x, Closure (params, (pc, pc_args))) ] ->
@@ -330,7 +331,12 @@ let rewrite_mutable
           ; Let (x, Apply { f = closure; args = vars; exact = true })
           ]
         in
-        free_pc, blocks, body
+        let lifter_closures =
+          Var.Set.union
+            lifter_closures
+            (Var.Set.(map mapping (filter (fun x -> List.mem x ~set:vars) lifter_closures)))
+        in
+        free_pc, blocks, body, Var.Set.add closure lifter_closures
     | _ ->
         let new_pc = free_pc in
         let free_pc = free_pc + 1 in
@@ -379,9 +385,14 @@ let rewrite_mutable
                 | Let (x, Closure _) -> Let (x, Field (closure', i))
                 | _ -> assert false)
         in
-        free_pc, blocks, body
+        let lifter_closures =
+          Var.Set.union
+            lifter_closures
+            (Var.Set.(map mapping (filter (fun x -> List.mem x ~set:vars) lifter_closures)))
+        in
+        free_pc, blocks, body, Var.Set.add closure lifter_closures
 
-let rec rewrite_closures mutated_vars rewrite_list free_pc blocks body : int * _ * _ list
+let rec rewrite_closures mutated_vars rewrite_list free_pc blocks body : int * _ * _ list * Var.Set.t
     =
   match body with
   | Let (_, Closure _) :: _ ->
@@ -391,11 +402,11 @@ let rec rewrite_closures mutated_vars rewrite_list free_pc blocks body : int * _
             Var.Map.add x.f_name x closures_map)
       in
       let components = group_closures ~tc_only:false closures_map in
-      let free_pc, blocks, closures =
+      let free_pc, blocks, closures, lifter_closures =
         List.fold_left
           (Array.to_list components)
-          ~init:(free_pc, blocks, [])
-          ~f:(fun (free_pc, blocks, acc) component ->
+          ~init:(free_pc, blocks, [], Var.Set.empty)
+          ~f:(fun (free_pc, blocks, acc, lifter_closures) component ->
             let free_pc, blocks, closures =
               let components =
                 match component with
@@ -422,37 +433,37 @@ let rec rewrite_closures mutated_vars rewrite_list free_pc blocks body : int * _
               ; ext = List.concat (List.rev closures.ext)
               }
             in
-            let free_pc, blocks, intrs =
-              rewrite_mutable free_pc blocks mutated_vars rewrite_list closures
+            let free_pc, blocks, intrs, lifter_closures =
+              rewrite_mutable free_pc blocks mutated_vars rewrite_list lifter_closures closures
             in
-            free_pc, blocks, intrs :: acc)
+            free_pc, blocks, intrs :: acc, lifter_closures)
       in
-      let free_pc, blocks, rem =
+      let free_pc, blocks, rem, lifter_closures' =
         rewrite_closures mutated_vars rewrite_list free_pc blocks rem
       in
-      free_pc, blocks, List.flatten closures @ rem
+      free_pc, blocks, List.flatten closures @ rem, Var.Set.union lifter_closures lifter_closures'
   | i :: rem ->
-      let free_pc, blocks, rem =
+      let free_pc, blocks, rem, lifter_closures =
         rewrite_closures mutated_vars rewrite_list free_pc blocks rem
       in
-      free_pc, blocks, i :: rem
-  | [] -> free_pc, blocks, []
+      free_pc, blocks, i :: rem, lifter_closures
+  | [] -> free_pc, blocks, [], Var.Set.empty
 
-let f p : Code.program =
+let f p : Code.program * Effects.lifter_functions =
   Code.invariant p;
   let mutated_vars = Freevars.f p in
   let rewrite_list = ref [] in
-  let blocks, free_pc =
+  let blocks, free_pc, lifter_closures =
     Addr.Map.fold
-      (fun pc _ (blocks, free_pc) ->
+      (fun pc _ (blocks, free_pc, lifter_closures) ->
         (* make sure we have the latest version *)
         let block = Addr.Map.find pc blocks in
-        let free_pc, blocks, body =
+        let free_pc, blocks, body, lifter_closures' =
           rewrite_closures mutated_vars rewrite_list free_pc blocks block.body
         in
-        Addr.Map.add pc { block with body } blocks, free_pc)
+        Addr.Map.add pc { block with body } blocks, free_pc, Var.Set.union lifter_closures lifter_closures')
       p.blocks
-      (p.blocks, p.free_pc)
+      (p.blocks, p.free_pc, Var.Set.empty)
   in
   (* Code.invariant (pc, blocks, free_pc); *)
   let p = { p with blocks; free_pc } in
@@ -461,7 +472,7 @@ let f p : Code.program =
         Subst.cont mapping pc program)
   in
   Code.invariant p;
-  p
+  p, lifter_closures
 
 let f p =
   let t = Timer.make () in

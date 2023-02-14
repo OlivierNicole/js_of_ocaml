@@ -533,7 +533,9 @@ let full
     +> specialize_js_once
     +> profile
     +> effects
-    +> (fun (a,b,c) -> (Generate_closure.f +> deadcode') a, b, c)
+    +> (fun (p, b, lifter_functions) ->
+          let p, lifter_functions' = Generate_closure.f p in
+          deadcode' p, b, Code.Var.Set.union lifter_functions lifter_functions')
   in
   let emit =
     generate d ~exported_runtime ~wrap_with_fun
