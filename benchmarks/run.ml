@@ -246,7 +246,7 @@ let _ =
   let compile_jsoo ?(effects = false) opts =
     compile
       (Format.sprintf
-         "js_of_ocaml -q --target-env browser --debug mark-runtime-gen %s %s"
+         "dune exec --root=.. -- js_of_ocaml -q --target-env browser --debug mark-runtime-gen %s %s"
          opts
          (if effects then "--enable=effects" else "--disable=effects"))
   in

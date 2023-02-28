@@ -14,7 +14,7 @@ graphsnopr: _noprecomp $(GRAPHSNOPR)
 
 graphspr: __precomp $(GRAPHSPR)
 
-graphseff: __precomp $(GRAPHSEFF)
+graphseff: _perf __precomp $(GRAPHSEFF) _noperf
 
 # For fast benchs:
 test: _perf fastrun $(GRAPHS) _noperf
@@ -234,6 +234,7 @@ nativejs.png: nativejs.svg
 %.png: %.svg
 	inkscape -D -o "$@" -w 1024 $<
 
+.PHONY: _perf
 _perf:
 	for i in /sys/devices/system/cpu/cpu* ; \
 	do \
@@ -242,6 +243,8 @@ _perf:
 	fi ; \
 	done
 
+.PHONY: _noperf
+_perf:
 _noperf:
 	for i in /sys/devices/system/cpu/cpu* ; \
 	do \
@@ -251,8 +254,9 @@ _noperf:
 	done
 
 
+.PHONY: clean
 clean: _noperf
-	rm -rf results build __precomp __run *.svg *.pdf *~ precomptmp __missingsizes __missingcompiletimes
+	rm -rf results build __precomp __run_effects __run *.svg *.pdf *~ precomptmp __missingsizes __missingcompiletimes
 
 
 copy-extra-bc:
