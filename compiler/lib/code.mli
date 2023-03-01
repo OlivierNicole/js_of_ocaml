@@ -256,6 +256,14 @@ val fold_closures_innermost_first :
     innermost closures first. Unlike with {!fold_closures}, only the closures
     reachable from [p.start] are considered. *)
 
+val fold_closures_depth :
+  program -> (depth:int -> Var.t option -> Var.t list -> cont -> 'd -> 'd) -> 'd -> 'd
+(** Same as {!fold_closures}, but also passes the depth of the first block to
+    the fold function. The block at [p.start] is of depth 0; all blocks
+    reachable from a block of depth [n] are of depth [n]; the first block of a
+    closure defined at depth [n] is of depth [n + 1]. Only the closures
+    reachable from [p.start] are included in the fold. *)
+
 val fold_children : 'c fold_blocs
 
 val traverse :
