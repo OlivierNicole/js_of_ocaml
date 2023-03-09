@@ -39,6 +39,9 @@ triple of handlers to deal with when the fiber terminates or an
 effect is performed. When resuming a continuation, the innermost fiber
 is resumed first.
 
+While the handlers are actually pairs of (direct-style, CPS) functions,
+exception handlers are simple CPS functions. FIXME what about the continuation?
+
 The handlers are CPS-transformed functions: they actually take an
 additional parameter which is the current low-level continuation.
 */
