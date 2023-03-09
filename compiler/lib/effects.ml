@@ -477,11 +477,19 @@ let cps_last ~st ~alloc_jump_closures pc ((last, last_loc) : last * loc) ~k :
 
 let cps_instr ~st (instr : instr) : instr =
   match instr with
+  | Let (_, Closure _)  ->
+      (* Due to the preliminary lambda lifting, all functions should be created
+         at toplevel. And toplevel code does not need to be CPS-transformed.
+         Therefore, there can never be a closure creation in code that needs to
+         be CPS-transformed. *)
+      assert false
+  (* FIXME remove
   | Let (x, Closure (params, (pc, _))) when Var.Set.mem x st.cps_needed ->
       (* Add the continuation parameter, and change the initial block if
          needed *)
       let k, cont = Hashtbl.find st.closure_info pc in
       Let (x, Closure (params @ [ k ], cont))
+  *)
   | Let (x, Prim (Extern "caml_alloc_dummy_function", [ size; arity ])) -> (
       match arity with
       | Pc (Int a) ->
