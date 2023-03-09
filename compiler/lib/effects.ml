@@ -38,6 +38,9 @@ open Code
 
 let debug = Debug.find "effects"
 
+let debug_print fmt =
+  if debug () then Format.(eprintf (fmt ^^ "%!")) else Format.(ifprintf err_formatter fmt)
+
 let get_edges g src = try Hashtbl.find g src with Not_found -> Addr.Set.empty
 
 let add_edge g src dst = Hashtbl.replace g src (Addr.Set.add dst (get_edges g src))
@@ -220,7 +223,8 @@ let compute_needed_transformations ~cfg ~idom ~cps_needed ~blocks ~start =
    dominator of the block. [closure_of_jump] provides the name of the
    function correspoding to each block. [closures_of_alloc_site]
    provides the list of functions which should be defined in a given
-   block. Exception handlers are dealt with separately.
+   block. The keys are the addresses of the original (direct-style) blocks.
+   Exception handlers are dealt with separately.
 *)
 type jump_closures =
   { closure_of_jump : Var.t Addr.Map.t
@@ -249,6 +253,8 @@ let jump_closures blocks_to_transform idom : jump_closures =
 
 type cps_calls = Var.Set.t
 
+type single_version_closures = Var.Set.t
+
 type st =
   { mutable new_blocks : Code.block Addr.Map.t * Code.Addr.t
   ; blocks : Code.block Addr.Map.t
@@ -264,6 +270,9 @@ type st =
   ; live_vars : Deadcode.variable_uses
   ; flow_info : Global_flow.info
   ; cps_calls : cps_calls ref
+  ; cps_pc_of_direct : (int, int) Hashtbl.t
+  ; ident_fn : Var.t
+  ; single_version_closures : single_version_closures ref
   }
 
 let add_block st block =
