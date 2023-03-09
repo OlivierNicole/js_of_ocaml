@@ -93,8 +93,8 @@ let effects p =
   if Config.Flag.effects ()
   then (
     if debug () then Format.eprintf "Effects...@.";
-    p |> Deadcode.f +> Effects.f +> map_fst Lambda_lifting.f)
-  else p, (Code.Var.Set.empty : Effects.cps_calls)
+    p |> Deadcode.f +> Effects.f)
+  else p, (Code.Var.Set.empty : Effects.cps_calls), (Code.Var.Set.empty : Effects.lifted_closures (* FIXME check this??? *)
 
 let exact_calls profile p =
   if not (Config.Flag.effects ())
