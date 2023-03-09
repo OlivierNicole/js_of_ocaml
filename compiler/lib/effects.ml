@@ -311,7 +311,9 @@ let cps_branch ~st ~src (pc, args) loc =
       (* We check the stack depth only for backward edges (so, at
          least once per loop iteration) *)
       let check = Hashtbl.find st.block_order src >= Hashtbl.find st.block_order pc in
-      tail_call ~st ~instrs ~exact:true ~check ~f:(closure_of_pc ~st pc) args loc
+      let f = closure_of_pc ~st pc in
+      st.single_version_closures := Var.Set.add f !(st.single_version_closures);
+      tail_call ~st ~instrs ~exact:true ~check ~f args loc
 
 let cps_jump_cont ~st ~src ((pc, _) as cont) loc =
   match Addr.Set.mem pc st.blocks_to_transform with
@@ -434,11 +436,14 @@ let cps_last ~st ~alloc_jump_closures pc ((last, last_loc) : last * loc) ~k :
       ( alloc_jump_closures
       , ( Switch (x, Array.map c1 ~f:cps_jump_cont, Array.map c2 ~f:cps_jump_cont)
         , last_loc ) )
-  | Pushtrap (body_cont, exn, ((handler_pc, _) as handler_cont), _) -> (
+  | Pushtrap (body_cont, exn, ((handler_pc, handler_args) as handler_cont), _) -> (
       assert (Hashtbl.mem st.is_continuation handler_pc);
       match Addr.Set.mem handler_pc st.blocks_to_transform with
       | false -> alloc_jump_closures, (last, last_loc)
       | true ->
+          let handler_cps_cont =
+            Hashtbl.find st.cps_pc_of_direct handler_pc, handler_args
+          in
           let constr_cont, exn_handler =
             allocate_continuation
               ~st
@@ -446,9 +451,11 @@ let cps_last ~st ~alloc_jump_closures pc ((last, last_loc) : last * loc) ~k :
               ~split_closures:true
               pc
               exn
-              handler_cont
+              handler_cps_cont
               last_loc
           in
+          st.single_version_closures :=
+            Var.Set.add exn_handler !(st.single_version_closures);
           let push_trap =
             Let (Var.fresh (), Prim (Extern "caml_push_trap", [ Pv exn_handler ])), noloc
           in
