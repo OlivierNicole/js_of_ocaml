@@ -71,6 +71,7 @@ type application_description =
   { arity : int
   ; exact : bool
   ; cps : bool
+  ; single_version : bool
   }
 
 module Share = struct
@@ -149,6 +150,7 @@ module Share = struct
 
   let get
       ~cps_calls
+      ~single_version_closures
       ?alias_strings
       ?(alias_prims = false)
       ?(alias_apply = true)
@@ -166,8 +168,9 @@ module Share = struct
               | Let (_, Constant c) -> get_constant c share
               | Let (x, Apply { args; exact; _ }) ->
                   let cps = Var.Set.mem x cps_calls in
+                  let single_version = Var.Set.mem x single_version_closures in
                   if (not exact) || cps
-                  then add_apply { arity = List.length args; exact; cps } share
+                  then add_apply { arity = List.length args; exact; cps; single_version } share
                   else share
               | Let (_, Prim (Extern "%closure", [ Pc (String name) ])) ->
                   let name = Primitive.resolve name in
@@ -259,15 +262,19 @@ module Share = struct
       try J.EVar (AppMap.find desc t.vars.applies)
       with Not_found ->
         let x =
-          let { arity; exact; cps } = desc in
+          let { arity; exact; cps; single_version } = desc in
           Var.fresh_n
             (Printf.sprintf
                "caml_%scall%d"
-               (match exact, cps with
-               | true, false -> assert false
-               | true, true -> "cps_exact_"
-               | false, false -> ""
-               | false, true -> "cps_")
+               (match exact, cps, single_version with
+               | true, true, false -> "cps_exact_"
+               | true, true, true -> "cps_exact_mono_"
+               | false, false, false -> ""
+               | false, true, false -> "cps_"
+               | true, false, _ (* Should not happen: no intermediary function needed *)
+               | _, false, true (* Cannot be a CPS function and single-version *)
+               | false, _, true (* Single-version functions are always exact *)
+               -> assert false)
                arity)
         in
         let v = J.V x in
@@ -285,6 +292,7 @@ module Ctx = struct
     ; should_export : bool
     ; effect_warning : bool ref
     ; cps_calls : Effects.cps_calls
+    ; single_version_closures : Effects.single_version_closures
     }
 
   let initial
@@ -294,6 +302,7 @@ module Ctx = struct
       blocks
       live
       cps_calls
+      single_version_closures
       share
       debug =
     { blocks
@@ -304,6 +313,7 @@ module Ctx = struct
     ; should_export
     ; effect_warning = ref (not warn_on_unhandled_effect)
     ; cps_calls
+    ; single_version_closures
     }
 end
 
@@ -760,9 +770,9 @@ let parallel_renaming params args continuation queue =
 
 (****)
 
-let apply_fun_raw ctx f params exact cps =
+let apply_fun_raw ctx f params exact cps single_version =
   let n = List.length params in
-  let apply_directly =
+  let apply_directly f params =
     (* Make sure we are performing a regular call, not a (slower)
        method call *)
     match f with
@@ -770,24 +780,35 @@ let apply_fun_raw ctx f params exact cps =
         J.call (J.dot f (Utf8_string.of_string_exn "call")) (s_var "null" :: params) J.N
     | _ -> J.call f params J.N
   in
-  let apply =
+  let apply cps single =
+    (* Adapt if [f] is a (direct-style, CPS) closure pair *)
+    let real_closure =
+      if not (Config.Flag.effects ()) || single then f
+      else
+        let idx = J.(ENum (Num.of_int32 (if cps then 2l else 1l))) in
+        J.EAccess (f, J.ANormal, idx)
+    in
     (* We skip the arity check when we know that we have the right
        number of parameters, since this test is expensive. *)
     if exact
-    then apply_directly
+    then apply_directly real_closure params
     else
       let l = Utf8_string.of_string_exn "l" in
       J.ECond
         ( J.EBin
             ( J.EqEq
             , J.ECond
-                ( J.EBin (J.Ge, J.dot f l, int 0)
-                , J.dot f l
-                , J.EBin (J.Eq, J.dot f l, J.dot f (Utf8_string.of_string_exn "length"))
+                ( J.EBin (J.Ge, J.dot real_closure l, int 0)
+                , J.dot real_closure l
+                , J.EBin (J.Eq, J.dot real_closure l, J.dot real_closure (Utf8_string.of_string_exn "length"))
                 )
             , int n )
-        , apply_directly
-        , J.call (runtime_fun ctx "caml_call_gen") [ f; J.array params ] J.N )
+        , apply_directly real_closure params
+        , J.call
+            (* Note: [caml_call_gen*] functions take a pair of closures *)
+            (runtime_fun ctx (if cps then "caml_call_gen_cps" else "caml_call_gen"))
+            [ f; J.array params ]
+            J.N )
   in
   if cps
   then (
@@ -796,13 +817,19 @@ let apply_fun_raw ctx f params exact cps =
        optimization. To implement it, we check the stack depth and
        bounce to a trampoline if needed, to avoid a stack overflow.
        The trampoline then performs the call in an shorter stack. *)
+    let f =
+      if single_version then
+        let zero = J.(ENum (Num.of_int32 0l)) in
+        J.array [ zero; zero; f ]
+      else f
+    in
     J.ECond
       ( J.call (runtime_fun ctx "caml_stack_check_depth") [] J.N
-      , apply
+      , apply cps single_version
       , J.call (runtime_fun ctx "caml_trampoline_return") [ f; J.array params ] J.N ))
-  else apply
+  else apply cps single_version
 
-let generate_apply_fun ctx { arity; exact; cps } =
+let generate_apply_fun ctx { arity; exact; cps; single_version } =
   let f' = Var.fresh_n "f" in
   let f = J.V f' in
   let params =
@@ -817,10 +844,10 @@ let generate_apply_fun ctx { arity; exact; cps } =
     ( None
     , J.fun_
         (f :: params)
-        [ J.Return_statement (Some (apply_fun_raw ctx f' params' exact cps)), J.N ]
+        [ J.Return_statement (Some (apply_fun_raw ctx f' params' exact cps single_version)), J.N ]
         J.N )
 
-let apply_fun ctx f params exact cps loc =
+let apply_fun ctx f params exact cps single_version loc =
   (* We always go through an intermediate function when doing CPS
      calls. This function first checks the stack depth to prevent
      a stack overflow. This makes the code smaller than inlining
@@ -828,12 +855,12 @@ let apply_fun ctx f params exact cps loc =
      since the function should get inlined by the JavaScript
      engines. *)
   if Config.Flag.inline_callgen () || (exact && not cps)
-  then apply_fun_raw ctx f params exact cps
+  then apply_fun_raw ctx f params exact cps single_version
   else
     let y =
       Share.get_apply
         (generate_apply_fun ctx)
-        { arity = List.length params; exact; cps }
+        { arity = List.length params; exact; cps; single_version }
         ctx.Ctx.share
     in
     J.call y (f :: params) loc
@@ -1020,6 +1047,7 @@ let rec translate_expr ctx queue loc x e level : _ * J.statement_list =
   match e with
   | Apply { f; args; exact } ->
       let cps = Var.Set.mem x ctx.Ctx.cps_calls in
+      let single_version = Var.Set.mem f ctx.Ctx.single_version_closures in
       let args, prop, queue =
         List.fold_right
           ~f:(fun x (args, prop, queue) ->
@@ -1030,7 +1058,7 @@ let rec translate_expr ctx queue loc x e level : _ * J.statement_list =
       in
       let (prop', f), queue = access_queue queue f in
       let prop = or_p prop prop' in
-      let e = apply_fun ctx f args exact cps loc in
+      let e = apply_fun ctx f args exact cps single_version loc in
       (e, prop, queue), []
   | Block (tag, a, array_or_not) ->
       let contents, prop, queue =
@@ -1789,11 +1817,12 @@ let f
     ~exported_runtime
     ~live_vars
     ~cps_calls
+    ~single_version_closures
     ~should_export
     ~warn_on_unhandled_effect
     debug =
   let t' = Timer.make () in
-  let share = Share.get ~cps_calls ~alias_prims:exported_runtime p in
+  let share = Share.get ~cps_calls ~single_version_closures ~alias_prims:exported_runtime p in
   let exported_runtime =
     if exported_runtime then Some (Code.Var.fresh_n "runtime", ref false) else None
   in
@@ -1805,6 +1834,7 @@ let f
       p.blocks
       live_vars
       cps_calls
+      single_version_closures
       share
       debug
   in
