@@ -295,6 +295,7 @@ let rewrite_mutable
     blocks
     mutated_vars
     rewrite_list
+    single_version_closures
     { int = closures_intern; ext = closures_extern } =
   let internal_and_external = closures_intern @ closures_extern in
   assert (not (List.is_empty closures_extern));
@@ -315,7 +316,7 @@ let rewrite_mutable
   in
   let vars = Var.Set.elements (Var.Set.diff all_mut names) in
   if List.is_empty vars
-  then free_pc, blocks, internal_and_external
+  then free_pc, blocks, internal_and_external, single_version_closures
   else
     match internal_and_external with
     | [ (Let (x, Closure (params, (pc, pc_args))), loc) ] ->
@@ -339,7 +340,12 @@ let rewrite_mutable
           ; Let (x, Apply { f = closure; args = vars; exact = true }), loc
           ]
         in
-        free_pc, blocks, body
+        let single_version_closures =
+          Var.Set.union
+            single_version_closures
+            (Var.Set.(map mapping (filter (List.mem ~set:vars) single_version_closures)))
+        in
+        free_pc, blocks, body, Var.Set.add closure single_version_closures
     | _ ->
         let new_pc = free_pc in
         let free_pc = free_pc + 1 in
@@ -388,9 +394,14 @@ let rewrite_mutable
                 | Let (x, Closure _), loc -> Let (x, Field (closure', i)), loc
                 | _ -> assert false)
         in
-        free_pc, blocks, body
+        let single_version_closures =
+          Var.Set.union
+            single_version_closures
+            (Var.Set.(map mapping (filter (List.mem ~set:vars) single_version_closures)))
+        in
+        free_pc, blocks, body, Var.Set.add closure single_version_closures
 
-let rec rewrite_closures mutated_vars rewrite_list free_pc blocks body : int * _ * _ list
+let rec rewrite_closures mutated_vars rewrite_list free_pc single_version_closures blocks body : int * _ * _ list * Var.Set.t
     =
   match body with
   | (Let (_, Closure _), _) :: _ ->
@@ -400,11 +411,11 @@ let rec rewrite_closures mutated_vars rewrite_list free_pc blocks body : int * _
             Var.Map.add x.f_name x closures_map)
       in
       let components = group_closures ~tc_only:false closures_map in
-      let free_pc, blocks, closures =
+      let free_pc, blocks, closures, single =
         List.fold_left
           (Array.to_list components)
-          ~init:(free_pc, blocks, [])
-          ~f:(fun (free_pc, blocks, acc) component ->
+          ~init:(free_pc, blocks, [], single_version_closures)
+          ~f:(fun (free_pc, blocks, acc, single) component ->
             let free_pc, blocks, closures =
               let components =
                 match component with
@@ -431,37 +442,37 @@ let rec rewrite_closures mutated_vars rewrite_list free_pc blocks body : int * _
               ; ext = List.concat (List.rev closures.ext)
               }
             in
-            let free_pc, blocks, intrs =
-              rewrite_mutable free_pc blocks mutated_vars rewrite_list closures
+            let free_pc, blocks, intrs, single =
+              rewrite_mutable free_pc blocks mutated_vars rewrite_list single closures
             in
-            free_pc, blocks, intrs :: acc)
+            free_pc, blocks, intrs :: acc, single)
       in
-      let free_pc, blocks, rem =
-        rewrite_closures mutated_vars rewrite_list free_pc blocks rem
+      let free_pc, blocks, rem, single =
+        rewrite_closures mutated_vars rewrite_list free_pc single blocks rem
       in
-      free_pc, blocks, List.flatten closures @ rem
+      free_pc, blocks, List.flatten closures @ rem, single
   | i :: rem ->
-      let free_pc, blocks, rem =
-        rewrite_closures mutated_vars rewrite_list free_pc blocks rem
+      let free_pc, blocks, rem, single =
+        rewrite_closures mutated_vars rewrite_list free_pc single_version_closures blocks rem
       in
-      free_pc, blocks, i :: rem
-  | [] -> free_pc, blocks, []
+      free_pc, blocks, i :: rem, single
+  | [] -> free_pc, blocks, [], single_version_closures
 
-let f p : Code.program =
+let f (p, single_version_closures) : Code.program * Effects.single_version_closures =
   Code.invariant p;
   let mutated_vars = Freevars.f p in
   let rewrite_list = ref [] in
-  let blocks, free_pc =
+  let blocks, free_pc, single_version_closures =
     Addr.Map.fold
-      (fun pc _ (blocks, free_pc) ->
+      (fun pc _ (blocks, free_pc, single) ->
         (* make sure we have the latest version *)
         let block = Addr.Map.find pc blocks in
-        let free_pc, blocks, body =
-          rewrite_closures mutated_vars rewrite_list free_pc blocks block.body
+        let free_pc, blocks, body, single =
+          rewrite_closures mutated_vars rewrite_list free_pc single blocks block.body
         in
-        Addr.Map.add pc { block with body } blocks, free_pc)
+        Addr.Map.add pc { block with body } blocks, free_pc, single)
       p.blocks
-      (p.blocks, p.free_pc)
+      (p.blocks, p.free_pc, single_version_closures)
   in
   (* Code.invariant (pc, blocks, free_pc); *)
   let p = { p with blocks; free_pc } in
@@ -470,7 +481,7 @@ let f p : Code.program =
         Subst.cont mapping pc program)
   in
   Code.invariant p;
-  p
+  p, single_version_closures
 
 let f p =
   let t = Timer.make () in

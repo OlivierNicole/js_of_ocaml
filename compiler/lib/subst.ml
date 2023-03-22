@@ -118,3 +118,38 @@ let rec build_mapping params args =
   | _ -> assert false
 
 let from_map m x = try Var.Map.find x m with Not_found -> x
+
+(****)
+
+module Bound = struct
+  let expr s e =
+    match e with
+    | Constant _ -> e
+    | Apply { f; args; exact } ->
+        Apply { f = s f; args = List.map args ~f:(fun x -> s x); exact }
+    | Block (n, a, k) -> Block (n, Array.map a ~f:(fun x -> s x), k)
+    | Field (x, n) -> Field (s x, n)
+    | Closure (l, pc) -> Closure (List.map l ~f:s, subst_cont s pc)
+    | Prim (p, l) ->
+        Prim
+          ( p
+          , List.map l ~f:(fun x ->
+                match x with
+                | Pv x -> Pv (s x)
+                | Pc _ -> x) )
+
+  let instr s i =
+    match i with
+    | Let (x, e) -> Let (s x, expr s e)
+    | Assign (x, y) -> Assign (s x, s y)
+    | Set_field (x, n, y) -> Set_field (s x, n, s y)
+    | Offset_ref (x, n) -> Offset_ref (s x, n)
+    | Array_set (x, y, z) -> Array_set (s x, s y, s z)
+
+  let instrs s l = List.map l ~f:(fun (i, loc) -> instr s i, loc)
+
+  let block s block =
+    { params = List.map block.params ~f:s
+    ; body = instrs s block.body
+    ; branch = last s block.branch }
+end
