@@ -40,7 +40,8 @@ effect is performed. When resuming a continuation, the innermost fiber
 is resumed first.
 
 While the handlers are actually pairs of (direct-style, CPS) functions,
-exception handlers are simple CPS functions. FIXME what about the continuation?
+exception handlers are simple CPS functions. Low-level continuations are also
+normal functions.
 
 The handlers are CPS-transformed functions: they actually take an
 additional parameter which is the current low-level continuation.
@@ -62,10 +63,24 @@ function caml_push_trap(handler) {
 //Requires: caml_exn_stack
 //If: effects
 function caml_pop_trap() {
-  if (!caml_exn_stack) return function(x){throw x;}
+  if (!caml_exn_stack) return [0, 0, function(x){throw x;}]
   var h = caml_exn_stack[1];
   caml_exn_stack=caml_exn_stack[2];
-  return h
+  return [0, 0, h]
+}
+
+//Provides: uncaught_effect_handler
+//Requires: caml_named_value, caml_raise_constant, caml_raise_with_arg, caml_string_of_jsbytes, caml_fresh_oo_id, caml_resume_stack
+//If: effects
+function uncaught_effect_handler(eff,k,ms) {
+  // Resumes the continuation k by raising exception Unhandled.
+  caml_resume_stack(k[1],ms);
+  var exn = caml_named_value("Effect.Unhandled");
+  if(exn) caml_raise_with_arg(exn, eff);
+  else {
+    exn = [248,caml_string_of_jsbytes("Effect.Unhandled"), caml_fresh_oo_id(0)];
+    caml_raise_constant(exn);
+  }
 }
 
 //Provides: caml_fiber_stack
@@ -74,6 +89,13 @@ function caml_pop_trap() {
 // (see effect.js) and k, x and e are the saved continuation,
 // exception stack and fiber stack of the parent fiber.
 var caml_fiber_stack;
+
+//Provides: caml_initialize_fiber_stack
+//Requires: caml_fiber_stack, uncaught_effect_handler
+//If: effects
+function caml_initialize_fiber_stack() {
+  caml_fiber_stack = {h:[0, 0, 0, [0, 0, uncaught_effect_handler]], r:{k:0, x:0, e:0}};
+}
 
 //Provides:caml_resume_stack
 //Requires: caml_named_value, caml_raise_constant, caml_exn_stack, caml_fiber_stack
@@ -118,18 +140,18 @@ function caml_perform_effect(eff, cont, k0) {
   // Move to parent fiber and execute the effect handler there
   // The handler is defined in Stdlib.Effect, so we know that the arity matches
   var k1 = caml_pop_fiber();
-  return caml_stack_check_depth()?handler(eff,cont,k1,k1)
+  return caml_stack_check_depth()?handler[2](eff,cont,k1,k1)
          :caml_trampoline_return(handler,[eff,cont,k1,k1]);
 }
 
 //Provides: caml_alloc_stack
-//Requires: caml_pop_fiber, caml_fiber_stack, caml_call_gen, caml_stack_check_depth, caml_trampoline_return
+//Requires: caml_pop_fiber, caml_fiber_stack, caml_call_gen_cps, caml_stack_check_depth, caml_trampoline_return
 //If: effects
 function caml_alloc_stack(hv, hx, hf) {
   function call(i, x) {
     var f=caml_fiber_stack.h[i];
     var args = [x, caml_pop_fiber()];
-    return caml_stack_check_depth()?caml_call_gen(f,args)
+    return caml_stack_check_depth()?caml_call_gen_cps(f,args)
            :caml_trampoline_return(f,args);
   }
   function hval(x) {
@@ -192,4 +214,26 @@ function caml_ml_condition_signal(t){
 //!If: effects
 function jsoo_effect_not_supported(){
   caml_failwith("Effect handlers are not supported");
+}
+
+//Provides: caml_trampoline_cps
+//Requires:caml_stack_depth, caml_call_gen_cps, caml_exn_stack, caml_fiber_stack, caml_wrap_exception
+//If: effects
+function caml_trampoline_cps(f, args) {
+  /* Note: f is not an ordinary function but a (direct-style, CPS) closure pair */
+  var res = {joo_tramp: f, joo_args: args};
+  do {
+    caml_stack_depth = 40;
+    try {
+      res = caml_call_gen_cps(res.joo_tramp, res.joo_args);
+    } catch (e) {
+      /* Handle exception coming from JavaScript or from the runtime. */
+      if (!caml_exn_stack.length) throw e;
+      var handler = caml_exn_stack[1];
+      caml_exn_stack = caml_exn_stack[2];
+      res = {joo_tramp: [0, 0, handler],
+             joo_args: [caml_wrap_exception(e)]};
+    }
+  } while(res && res.joo_args)
+  return res;
 }
