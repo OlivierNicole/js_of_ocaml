@@ -45,6 +45,8 @@ val from_map : Var.t Var.Map.t -> Var.t -> Var.t
     parameters, or as closure parameters. *)
 module Bound : sig
   val instr : (Var.t -> Var.t) -> instr -> instr
+
   val instrs : (Var.t -> Var.t) -> (instr * loc) list -> (instr * loc) list
+
   val block : (Var.t -> Var.t) -> block -> block
 end

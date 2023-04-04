@@ -28,7 +28,7 @@ let rec compute_depth program pc =
     { fold = Code.fold_children }
     (fun pc d ->
       let block = Code.Addr.Map.find pc program.blocks in
-      List.fold_left block.body ~init:d ~f:(fun d (i,_) ->
+      List.fold_left block.body ~init:d ~f:(fun d (i, _) ->
           match i with
           | Let (_, Closure (_, (pc', _))) ->
               let d' = compute_depth program pc' in
@@ -54,7 +54,7 @@ let collect_free_vars program var_depth depth pc =
               assert (d >= 0);
               if d > baseline && d < depth then vars := Var.Set.add x !vars))
           block;
-        List.iter block.body ~f:(fun (i,_) ->
+        List.iter block.body ~f:(fun (i, _) ->
             match i with
             | Let (_, Closure (_, (pc', _))) -> traverse pc'
             | _ -> ()))
@@ -71,13 +71,14 @@ let mark_bound_variables var_depth block depth =
       let idx = Var.idx x in
       if idx < Array.length var_depth then var_depth.(idx) <- depth)
     block;
-  List.iter block.body ~f:(fun (i,_) ->
+  List.iter block.body ~f:(fun (i, _) ->
       match i with
       | Let (_, Closure (params, _)) ->
           List.iter params ~f:(fun x -> var_depth.(Var.idx x) <- depth + 1)
       | _ -> ())
 
-let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) pc depth : _ * _ * Var.Set.t =
+let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) pc depth :
+    _ * _ * Var.Set.t =
   Code.preorder_traverse
     { fold = Code.fold_children }
     (fun pc (program, functions, lifted) ->
@@ -87,7 +88,10 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
       then (
         assert (List.is_empty functions);
         let program, body, lifted' =
-          List.fold_right block.body ~init:(program, [], Var.Set.empty) ~f:(fun (i, loc) (program, rem, lifted) ->
+          List.fold_right
+            block.body
+            ~init:(program, [], Var.Set.empty)
+            ~f:(fun (i, loc) (program, rem, lifted) ->
               match i with
               | Let (_, Closure (_, (pc', _))) as i ->
                   let program, functions, lifted =
@@ -108,23 +112,24 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
           | (Let (_, Closure _), _) :: _ -> false
           | _ -> true
         in
-        let rec rewrite_body current_contiguous (st : Code.program * (instr * loc) list * Var.Set.t) l =
+        let rec rewrite_body
+            current_contiguous
+            (st : Code.program * (instr * loc) list * Var.Set.t)
+            l =
           match l with
           | (Let (f, (Closure (_, (pc', _)) as cl)), loc) :: rem
             when List.is_empty current_contiguous && does_not_start_with_closure rem ->
               (* We lift an isolated closure *)
-              if debug () then
-                Format.eprintf "@[<v>lifting isolated closure %s@,@]" (Var.to_string f);
-              let program, functions, lifted =
-                traverse var_depth st pc' (depth + 1)
-              in
+              if debug ()
+              then Format.eprintf "@[<v>lifting isolated closure %s@,@]" (Var.to_string f);
+              let program, functions, lifted = traverse var_depth st pc' (depth + 1) in
               let free_vars = collect_free_vars program var_depth (depth + 1) pc' in
-              if debug () then begin
+              if debug ()
+              then (
                 Format.eprintf "@[<v>free variables:@,";
                 free_vars
                 |> Var.Set.iter (fun v -> Format.eprintf "%s,@ " (Var.to_string v));
-                Format.eprintf "@]";
-              end;
+                Format.eprintf "@]");
               let s =
                 Var.Set.fold
                   (fun x m -> Var.Map.add x (Var.fork x) m)
@@ -144,7 +149,9 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
                   (Var.Set.cardinal free_vars)
                   (compute_depth program pc');
               let pc'' = program.free_pc in
-              let bl = { params = []; body = [ (Let (f', cl), noloc) ]; branch = (Return f', noloc) } in
+              let bl =
+                { params = []; body = [ Let (f', cl), noloc ]; branch = Return f', noloc }
+              in
               let program =
                 { program with
                   free_pc = pc'' + 1
@@ -162,35 +169,37 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
           | (Let (cname, Closure (params, (pc', args))), loc) :: rem ->
               let st = traverse var_depth st pc' (depth + 1) in
               rewrite_body ((cname, params, pc', args, loc) :: current_contiguous) st rem
-          | l ->
+          | l -> (
               assert (List.length current_contiguous <> 1);
-              begin match current_contiguous with
-              | [] ->
-                  begin match l with
+              match current_contiguous with
+              | [] -> (
+                  match l with
                   | i :: rem ->
                       let rem', st = rewrite_body [] st rem in
                       i :: rem', st
-                  | [] -> [], st
-                  end
+                  | [] -> [], st)
               | _ ->
                   let program, functions, lifted =
-                    if debug () then
-                      Format.(eprintf "@[<v>Need to lift:@,%a@,@]"
-                        (pp_print_list ~pp_sep:pp_print_space pp_print_string)
-                        (List.map ~f:(fun (f,_,_,_, _) -> Code.Var.to_string f) current_contiguous));
+                    (if debug ()
+                    then
+                      Format.(
+                        eprintf
+                          "@[<v>Need to lift:@,%a@,@]"
+                          (pp_print_list ~pp_sep:pp_print_space pp_print_string)
+                          (List.map
+                             ~f:(fun (f, _, _, _, _) -> Code.Var.to_string f)
+                             current_contiguous)));
                     List.fold_left
                       current_contiguous
-                      ~f:(fun st (_, _, pc, _, _) ->
-                        traverse var_depth st pc (depth + 1)
-                      )
+                      ~f:(fun st (_, _, pc, _, _) -> traverse var_depth st pc (depth + 1))
                       ~init:st
                   in
                   let free_vars =
                     List.fold_left
                       current_contiguous
-                      ~f:(fun acc (_,_,pc,_,_) ->
-                            Var.Set.union acc
-                            @@ collect_free_vars program var_depth (depth + 1) pc)
+                      ~f:(fun acc (_, _, pc, _, _) ->
+                        Var.Set.union acc
+                        @@ collect_free_vars program var_depth (depth + 1) pc)
                       ~init:Var.Set.empty
                   in
                   let s =
@@ -202,33 +211,32 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
                   let program =
                     List.fold_left
                       current_contiguous
-                      ~f:(fun program (_,_,pc,_,_) ->
-                            Subst.cont (Subst.from_map s) pc program)
+                      ~f:(fun program (_, _, pc, _, _) ->
+                        Subst.cont (Subst.from_map s) pc program)
                       ~init:program
                   in
                   let f's =
-                    List.map
-                      current_contiguous
-                      ~f:(fun (f,_,_,_,_) ->
-                            Var.(try Map.find f s with Not_found -> fork f))
+                    List.map current_contiguous ~f:(fun (f, _, _, _, _) ->
+                        Var.(try Map.find f s with Not_found -> fork f))
                   in
                   let s =
                     List.fold_left
                       current_contiguous
-                      ~f:(fun s (f,_,_,_,_) -> Var.Map.remove f s)
+                      ~f:(fun s (f, _, _, _, _) -> Var.Map.remove f s)
                       ~init:s
                     |> Var.Map.bindings
                   in
                   let f_tuple = Var.fresh_n "recfuncs" in
-                  if debug ()
+                  (if debug ()
                   then
-                    Format.(eprintf
-                      "LIFT %a in tuple %s (depth:%d free_vars:%d)@,"
-                      (pp_print_list ~pp_sep:pp_print_space pp_print_string)
-                      (List.map ~f:Code.Var.to_string f's)
-                      (Code.Var.to_string f_tuple)
-                      depth
-                      (Var.Set.cardinal free_vars));
+                    Format.(
+                      eprintf
+                        "LIFT %a in tuple %s (depth:%d free_vars:%d)@,"
+                        (pp_print_list ~pp_sep:pp_print_space pp_print_string)
+                        (List.map ~f:Code.Var.to_string f's)
+                        (Code.Var.to_string f_tuple)
+                        depth
+                        (Var.Set.cardinal free_vars)));
                   let pc_tuple = program.free_pc in
                   let lifted_block =
                     let tuple = Var.fresh_n "tuple" in
@@ -238,9 +246,10 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
                           f's
                           current_contiguous
                           ~f:(fun f' (_, params, pc, args, loc) ->
-                                Let (f', Closure (params, (pc, args))), loc)
-                        @ [ (Let (tuple, Block (0, Array.of_list f's, NotArray)), noloc) ]
-                    ; branch = Return tuple, noloc }
+                            Let (f', Closure (params, (pc, args))), loc)
+                        @ [ Let (tuple, Block (0, Array.of_list f's, NotArray)), noloc ]
+                    ; branch = Return tuple, noloc
+                    }
                   in
                   let program =
                     { program with
@@ -260,18 +269,15 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
                         i :: rem', st
                     | [] -> [], (program, functions, lifted)
                   in
-                  ( let tuple = Var.fresh_n "tuple" in
-                    ( Let
+                  let tuple = Var.fresh_n "tuple" in
+                  ( ( Let
                         ( tuple
                         , Apply { f = f_tuple; args = List.map ~f:fst s; exact = true } )
                     , noloc )
-                    :: List.mapi
-                         current_contiguous
-                         ~f:(fun i (f,_,_,_,loc) ->
-                               Let (f, Field (tuple, i)), loc)
+                    :: List.mapi current_contiguous ~f:(fun i (f, _, _, _, loc) ->
+                           Let (f, Field (tuple, i)), loc)
                     @ rem'
-                  , st )
-              end
+                  , st ))
         in
         let body, (program, functions, lifted) =
           rewrite_body [] (program, functions, lifted) block.body
@@ -284,11 +290,11 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
     (program, functions, lifted)
 
 let f program =
-  if debug () then begin
+  if debug ()
+  then (
     Format.eprintf "@[<v>Program before lambda lifting:@,";
     Code.Print.program (fun _ _ -> "") program;
-    Format.eprintf "@]";
-  end;
+    Format.eprintf "@]");
   let t = Timer.make () in
   let nv = Var.count () in
   let var_depth = Array.make nv (-1) in

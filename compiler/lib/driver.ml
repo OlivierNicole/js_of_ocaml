@@ -92,7 +92,10 @@ let effects p =
   then (
     if debug () then Format.eprintf "Effects...@.";
     p |> Deadcode.f +> Effects.f)
-  else p, (Code.Var.Set.empty : Effects.cps_calls), (Code.Var.Set.empty : Effects.single_version_closures) (* FIXME check this??? *)
+  else
+    ( p
+    , (Code.Var.Set.empty : Effects.cps_calls)
+    , (Code.Var.Set.empty : Effects.single_version_closures) )
 
 let exact_calls profile p =
   if not (Config.Flag.effects ())
@@ -579,10 +582,10 @@ let full ~standalone ~wrap_with_fun ~profile ~linkall ~source_map formatter d p 
        | O3 -> o3)
     +> exact_calls profile
     +> effects
-    +> (fun (p, cps_calls, single_version_closures) ->
-          let p, single_version_closures = Generate_closure.f (p, single_version_closures) in
-          let p = deadcode' p in
-          p, cps_calls, single_version_closures)
+    +> fun (p, cps_calls, single_version_closures) ->
+    let p, single_version_closures = Generate_closure.f (p, single_version_closures) in
+    let p = deadcode' p in
+    p, cps_calls, single_version_closures
   in
   let emit =
     generate d ~exported_runtime ~wrap_with_fun ~warn_on_unhandled_effect:standalone
