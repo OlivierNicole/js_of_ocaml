@@ -166,7 +166,10 @@ module Share = struct
                   let cps = Var.Set.mem x cps_calls in
                   let single_version = Var.Set.mem x single_version_closures in
                   if (not exact) || cps
-                  then add_apply { arity = List.length args; exact; cps; single_version } share
+                  then
+                    add_apply
+                      { arity = List.length args; exact; cps; single_version }
+                      share
                   else share
               | Let (_, Prim (Extern "%closure", [ Pc (String name) ])) ->
                   let name = Primitive.resolve name in
@@ -269,8 +272,8 @@ module Share = struct
                | false, true, false -> "cps_"
                | true, false, _ (* Should not happen: no intermediary function needed *)
                | _, false, true (* Cannot be a CPS function and single-version *)
-               | false, _, true (* Single-version functions are always exact *)
-               -> assert false)
+               | false, _, true (* Single-version functions are always exact *) ->
+                   assert false)
                arity)
         in
         let v = J.V x in
@@ -971,7 +974,8 @@ let apply_fun_raw ctx f params exact cps single_version =
   let apply cps single =
     (* Adapt if [f] is a (direct-style, CPS) closure pair *)
     let real_closure =
-      if not (Config.Flag.effects ()) || single then f
+      if (not (Config.Flag.effects ())) || single
+      then f
       else
         let idx = J.(ENum (Num.of_int32 (if cps then 2l else 1l))) in
         J.EAccess (f, J.ANormal, idx)
@@ -988,8 +992,10 @@ let apply_fun_raw ctx f params exact cps single_version =
             , J.ECond
                 ( J.EBin (J.Ge, J.dot real_closure l, int 0)
                 , J.dot real_closure l
-                , J.EBin (J.Eq, J.dot real_closure l, J.dot real_closure (Utf8_string.of_string_exn "length"))
-                )
+                , J.EBin
+                    ( J.Eq
+                    , J.dot real_closure l
+                    , J.dot real_closure (Utf8_string.of_string_exn "length") ) )
             , int n )
         , apply_directly real_closure params
         , J.call
@@ -1006,7 +1012,8 @@ let apply_fun_raw ctx f params exact cps single_version =
        bounce to a trampoline if needed, to avoid a stack overflow.
        The trampoline then performs the call in an shorter stack. *)
     let f =
-      if single_version then
+      if single_version
+      then
         let zero = J.(ENum (Num.of_int32 0l)) in
         J.array [ zero; zero; f ]
       else f
@@ -1032,7 +1039,10 @@ let generate_apply_fun ctx { arity; exact; cps; single_version } =
     ( None
     , J.fun_
         (f :: params)
-        [ J.Return_statement (Some (apply_fun_raw ctx f' params' exact cps single_version)), J.N ]
+        [ ( J.Return_statement
+              (Some (apply_fun_raw ctx f' params' exact cps single_version))
+          , J.N )
+        ]
         J.N )
 
 let apply_fun ctx f params exact cps single_version loc =
@@ -2129,7 +2139,9 @@ let f
     ~warn_on_unhandled_effect
     debug =
   let t' = Timer.make () in
-  let share = Share.get ~cps_calls ~single_version_closures ~alias_prims:exported_runtime p in
+  let share =
+    Share.get ~cps_calls ~single_version_closures ~alias_prims:exported_runtime p
+  in
   let exported_runtime =
     if exported_runtime then Some (Code.Var.fresh_n "runtime", ref false) else None
   in

@@ -16,7 +16,7 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *)
 
+val f : Code.program -> Code.program * Code.Var.Set.t
 (** Lifts every function of the program indistinctly. Functions that may be
     mutually recursive are lifted together. Also yields the names of the
     lifting closures generated. *)
-val f : Code.program -> Code.program * Code.Var.Set.t

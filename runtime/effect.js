@@ -39,12 +39,13 @@ triple of handlers to deal with when the fiber terminates or an
 effect is performed. When resuming a continuation, the innermost fiber
 is resumed first.
 
-While the handlers are actually pairs of (direct-style, CPS) functions,
-exception handlers are simple CPS functions. Low-level continuations are also
-normal functions.
-
 The handlers are CPS-transformed functions: they actually take an
 additional parameter which is the current low-level continuation.
+
+The handlers are conceptually pairs of functions: direct-style and CPS. This is
+implemented by the CPS version of [f] being accessible as [f.cps]. Exception
+handlers are normal functions (and they are in CPS). Low-level continuations
+are also normal functions.
 */
 
 //Provides: caml_exn_stack
@@ -63,10 +64,10 @@ function caml_push_trap(handler) {
 //Requires: caml_exn_stack
 //If: effects
 function caml_pop_trap() {
-  if (!caml_exn_stack) return [0, 0, function(x){throw x;}]
+  if (!caml_exn_stack) return function(x){throw x;}
   var h = caml_exn_stack[1];
   caml_exn_stack=caml_exn_stack[2];
-  return [0, 0, h]
+  return h
 }
 
 //Provides: uncaught_effect_handler
@@ -94,7 +95,7 @@ var caml_fiber_stack;
 //Requires: caml_fiber_stack, uncaught_effect_handler
 //If: effects
 function caml_initialize_fiber_stack() {
-  caml_fiber_stack = {h:[0, 0, 0, [0, 0, uncaught_effect_handler]], r:{k:0, x:0, e:0}};
+  caml_fiber_stack = {h:[0, 0, 0, uncaught_effect_handler], r:{k:0, x:0, e:0}};
 }
 
 //Provides:caml_resume_stack
@@ -140,7 +141,7 @@ function caml_perform_effect(eff, cont, k0) {
   // Move to parent fiber and execute the effect handler there
   // The handler is defined in Stdlib.Effect, so we know that the arity matches
   var k1 = caml_pop_fiber();
-  return caml_stack_check_depth()?handler[2](eff,cont,k1,k1)
+  return caml_stack_check_depth()?handler.cps(eff,cont,k1,k1)
          :caml_trampoline_return(handler,[eff,cont,k1,k1]);
 }
 
@@ -231,7 +232,7 @@ function caml_trampoline_cps(f, args) {
       if (!caml_exn_stack.length) throw e;
       var handler = caml_exn_stack[1];
       caml_exn_stack = caml_exn_stack[2];
-      res = {joo_tramp: [0, 0, handler],
+      res = {joo_tramp: {cps: handler},
              joo_args: [caml_wrap_exception(e)]};
     }
   } while(res && res.joo_args)
