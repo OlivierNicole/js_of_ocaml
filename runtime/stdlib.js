@@ -73,14 +73,13 @@ function caml_call_gen(f, args) {
 var caml_call_gen_tuple = (
   function() {
     function caml_call_gen_direct(f, args) {
-      var fdir = f[1];
-      var n = (fdir.l >= 0)?fdir.l:(fdir.l = fdir.length);
+      var n = (f.l >= 0)?f.l:(f.l = f.length);
       var argsLen = args.length;
       var d = n - argsLen;
       if (d == 0) {
-        return fdir.apply(null, args);
+        return f.apply(null, args);
       } else if (d < 0) {
-        return caml_call_gen_direct(fdir.apply(null, args.slice(0,n)), args.slice(n));
+        return caml_call_gen_direct(f.apply(null, args.slice(0,n)), args.slice(n));
       } else {
         // FIXME: Restore the optimization of handling specially d = 1 or 2
         return [
@@ -104,13 +103,12 @@ var caml_call_gen_tuple = (
       }
     }
     function caml_call_gen_cps(f, args) {
-      var fcps = f[2];
-      var n = (fcps.l >= 0)?fcps.l:(fcps.l = fcps.length);
-      if (n === 0) return fcps.apply(null, args);
+      var n = (f.cps.l >= 0)?f.cps.l:(f.cps.l = f.cps.length);
+      if (n === 0) return f.cps.apply(null, args);
       var argsLen = args.length;
       var d = n - argsLen;
       if (d == 0) {
-        return fcps.apply(null, args);
+        return f.cps.apply(null, args);
       }
       else if (d < 0) {
         var rest = args.slice(n - 1);
@@ -121,7 +119,7 @@ var caml_call_gen_tuple = (
           args[args.length - 1] = k;
           return caml_call_gen_cps(g, args);
         };
-        return fcps.apply(null, args);
+        return f.cps.apply(null, args);
       } else {
         argsLen--;
         var k = args[argsLen];

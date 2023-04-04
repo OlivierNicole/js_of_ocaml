@@ -343,7 +343,7 @@ let rewrite_mutable
         let single_version_closures =
           Var.Set.union
             single_version_closures
-            (Var.Set.(map mapping (filter (List.mem ~set:vars) single_version_closures)))
+            Var.Set.(map mapping (filter (List.mem ~set:vars) single_version_closures))
         in
         free_pc, blocks, body, Var.Set.add closure single_version_closures
     | _ ->
@@ -397,12 +397,17 @@ let rewrite_mutable
         let single_version_closures =
           Var.Set.union
             single_version_closures
-            (Var.Set.(map mapping (filter (List.mem ~set:vars) single_version_closures)))
+            Var.Set.(map mapping (filter (List.mem ~set:vars) single_version_closures))
         in
         free_pc, blocks, body, Var.Set.add closure single_version_closures
 
-let rec rewrite_closures mutated_vars rewrite_list free_pc single_version_closures blocks body : int * _ * _ list * Var.Set.t
-    =
+let rec rewrite_closures
+    mutated_vars
+    rewrite_list
+    free_pc
+    single_version_closures
+    blocks
+    body : int * _ * _ list * Var.Set.t =
   match body with
   | (Let (_, Closure _), _) :: _ ->
       let closures, rem = collect_closures blocks mutated_vars body in
@@ -453,7 +458,13 @@ let rec rewrite_closures mutated_vars rewrite_list free_pc single_version_closur
       free_pc, blocks, List.flatten closures @ rem, single
   | i :: rem ->
       let free_pc, blocks, rem, single =
-        rewrite_closures mutated_vars rewrite_list free_pc single_version_closures blocks rem
+        rewrite_closures
+          mutated_vars
+          rewrite_list
+          free_pc
+          single_version_closures
+          blocks
+          rem
       in
       free_pc, blocks, i :: rem, single
   | [] -> free_pc, blocks, [], single_version_closures

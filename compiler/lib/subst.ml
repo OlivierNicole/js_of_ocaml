@@ -151,5 +151,6 @@ module Bound = struct
   let block s block =
     { params = List.map block.params ~f:s
     ; body = instrs s block.body
-    ; branch = last s block.branch }
+    ; branch = last s block.branch
+    }
 end

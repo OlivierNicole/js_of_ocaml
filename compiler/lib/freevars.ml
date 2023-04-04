@@ -78,7 +78,9 @@ let iter_block_free_vars f block =
 
 let iter_instr_bound_vars ?(closure_params = false) f i =
   match i with
-  | Let (x, Closure (params, _)) when closure_params -> f x; List.iter ~f params
+  | Let (x, Closure (params, _)) when closure_params ->
+      f x;
+      List.iter ~f params
   | Let (x, _) -> f x
   | Set_field _ | Offset_ref _ | Array_set _ | Assign _ -> ()
 
