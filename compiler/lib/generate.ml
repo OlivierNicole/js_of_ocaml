@@ -275,7 +275,6 @@ module Share = struct
                | false, false, false -> ""
                | false, true, false -> "cps_"
                | true, false, _ (* Should not happen: no intermediary function needed *)
-               | _, false, true (* Cannot be a CPS function and single-version *)
                | false, _, true (* Single-version functions are always exact *) ->
                    assert false)
                arity)
@@ -773,7 +772,10 @@ let parallel_renaming params args continuation queue =
 
 (****)
 
-let apply_fun_raw ctx f params exact cps single_version =
+
+let apply_fun_raw =
+  let cps_field = Utf8_string.of_string_exn "cps" in
+  fun ctx f params exact cps single_version ->
   let n = List.length params in
   let apply_directly f params =
     (* Make sure we are performing a regular call, not a (slower)
@@ -786,11 +788,10 @@ let apply_fun_raw ctx f params exact cps single_version =
   let apply cps single =
     (* Adapt if [f] is a (direct-style, CPS) closure pair *)
     let real_closure =
-      if (not (Config.Flag.effects ())) || single
+      if (not (Config.Flag.effects ())) || not cps || single
       then f
-      else
-        let idx = J.(ENum (Num.of_int32 (if cps then 2l else 1l))) in
-        J.EAccess (f, J.ANormal, idx)
+      else (* Effects enabled, CPS version, not single-version *)
+        J.EDot (f, J.ANormal, cps_field)
     in
     (* We skip the arity check when we know that we have the right
        number of parameters, since this test is expensive. *)
@@ -811,7 +812,7 @@ let apply_fun_raw ctx f params exact cps single_version =
             , int n )
         , apply_directly real_closure params
         , J.call
-            (* Note: [caml_call_gen*] functions take a pair of closures *)
+            (* Note: [caml_call_gen*] functions takes a two-version function *)
             (runtime_fun ctx (if cps then "caml_call_gen_cps" else "caml_call_gen"))
             [ f; J.array params ]
             J.N )
@@ -823,13 +824,6 @@ let apply_fun_raw ctx f params exact cps single_version =
        optimization. To implement it, we check the stack depth and
        bounce to a trampoline if needed, to avoid a stack overflow.
        The trampoline then performs the call in an shorter stack. *)
-    let f =
-      if single_version
-      then
-        let zero = J.(ENum (Num.of_int32 0l)) in
-        J.array [ zero; zero; f ]
-      else f
-    in
     J.ECond
       ( J.call (runtime_fun ctx "caml_stack_check_depth") [] J.N
       , apply cps single_version
