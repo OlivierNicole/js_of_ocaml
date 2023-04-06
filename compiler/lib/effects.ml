@@ -793,29 +793,6 @@ let subst_blocks blocks s =
 let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
   (* Define an identity function, needed for the boilerplate around "resume" *)
   let ident_fn = Var.fresh_n "identity" in
-  let id_pc, p =
-    let blocks =
-      let id_arg = Var.fresh_n "x" in
-      Addr.Map.add
-        p.free_pc
-        { params = [ id_arg ]; body = []; branch = Return id_arg, noloc }
-        p.blocks
-    in
-    p.free_pc, { start = p.start; blocks; free_pc = p.free_pc + 1 }
-  in
-  let p =
-    let id_arg = Var.fresh_n "x" in
-    let blocks =
-      Addr.Map.add
-        p.free_pc
-        { params = []
-        ; body = [ Let (ident_fn, Closure ([ id_arg ], (id_pc, [ id_arg ]))), noloc ]
-        ; branch = Branch (p.start, []), noloc
-        }
-        p.blocks
-    in
-    { start = p.free_pc; blocks; free_pc = p.free_pc + 1 }
-  in
   let closure_info = Hashtbl.create 16 in
   let cps_calls = ref Var.Set.empty in
   let single_version_closures = ref lifter_functions in
@@ -910,7 +887,7 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
             start
             blocks
             ());
-        let blocks =
+        let blocks, free_pc =
           (* For every block in the closure,
              1. add its CPS translation to the block map at a fresh address, if
                needed
@@ -960,12 +937,14 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
                 | None -> blocks, s
                 | Some b ->
                     let cps_pc = mk_cps_pc_of_direct ~st pc in
+                    let new_blocks, free_pc = st.new_blocks in
+                    st.new_blocks <- Addr.Map.add cps_pc b new_blocks, free_pc;
                     Addr.Map.add cps_pc b blocks, s)
               start
               st.blocks
               (st.blocks, Var.Map.empty)
           in
-          let cps_blocks, _ = st.new_blocks in
+          let cps_blocks, free_pc = st.new_blocks in
           (* Substitute all variables bound in the CPS version with fresh
              variables to avoid clashing with the definitions in the original
              blocks. *)
@@ -995,7 +974,7 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
           st.single_version_closures :=
             Var.Set.map direct_subst !(st.single_version_closures);
           let blocks = Addr.Map.fold Addr.Map.add cps_blocks blocks in
-          blocks
+          blocks, free_pc
         in
         { p with blocks; free_pc })
       p
@@ -1003,8 +982,9 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
   let p =
     match Hashtbl.find_opt closure_info p.start with
     | None -> p
-    | Some (k, _) ->
-        (* Call [caml_callback] to set up the execution context. *)
+    | Some (k, (_, cps_start, _)) ->
+        (* Call [caml_trampoline_cps] to set up the execution context. *)
+        (* FIXME used to be [caml_callback], but probably unneeded, FIXME confirm that *)
         let new_start = p.free_pc in
         let blocks =
           let main = Var.fresh () in
@@ -1014,22 +994,41 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
             new_start
             { params = []
             ; body =
-                [ Let (main, Closure ([ k ], (p.start, []))), noloc
+                [ Let (main, Closure ([ k ], (cps_start, []))), noloc
                 ; Let (args, Prim (Extern "%js_array", [])), noloc
-                ; Let (res, Prim (Extern "caml_callback", [ Pv main; Pv args ])), noloc
+                ; Let (res, Prim (Extern "caml_trampoline_cps", [ Pv main; Pv args ])), noloc
                 ]
             ; branch = Return res, noloc
             }
             p.blocks
         in
+        (* Remove the direct-style toplevel code as it is now unreachable *)
+        let blocks =
+          Code.traverse
+            { fold = Code.fold_children }
+            (fun pc blocks ->
+              Addr.Map.remove pc blocks)
+            p.start
+            blocks
+            blocks
+        in
         { start = new_start; blocks; free_pc = new_start + 1 }
   in
   let p =
-    (* Initialize the global fiber stack and define a global identity function *)
-    let new_start = p.free_pc in
+    (* Initialize the global fiber stack and define a global identity function,
+       needed to translate [%resume] *)
+    let id_pc = p.free_pc in
     let blocks =
-      let id_arg = Var.fresh_n "x" in
-      let dummy = Var.fresh_n "dummy" in
+      let id_param = Var.fresh_n "x" in
+      Addr.Map.add
+        id_pc
+        { params = [ id_param ]; body = []; branch = Return id_param, noloc }
+        p.blocks
+    in
+    let id_arg = Var.fresh_n "x" in
+    let dummy = Var.fresh_n "dummy" in
+    let new_start = id_pc + 1 in
+    let blocks =
       Addr.Map.add
         new_start
         { params = []
@@ -1039,7 +1038,7 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
             ]
         ; branch = Branch (p.start, []), noloc
         }
-        p.blocks
+        blocks
     in
     { start = new_start; blocks; free_pc = new_start + 1 }
   in
