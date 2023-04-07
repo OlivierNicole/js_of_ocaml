@@ -238,3 +238,10 @@ function caml_trampoline_cps(f, args) {
   } while(res && res.joo_args)
   return res;
 }
+
+//Provides: caml_cps_closure
+//If: effects
+function caml_cps_closure(direct_f, cps_f) {
+  direct_f.cps = cps_f;
+  return direct_f;
+}
