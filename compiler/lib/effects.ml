@@ -279,14 +279,18 @@ let add_block st block =
   st.new_blocks <- Addr.Map.add free_pc block blocks, free_pc + 1;
   free_pc
 
+let mk_cps_pc_of_direct cps_pc_of_direct free_pc pc =
+  try Hashtbl.find cps_pc_of_direct pc, free_pc
+  with Not_found ->
+    Hashtbl.add cps_pc_of_direct pc free_pc;
+    free_pc, free_pc + 1
+
 (* Provide the address of the CPS translation of a block *)
 let mk_cps_pc_of_direct ~st pc =
-  try Hashtbl.find st.cps_pc_of_direct pc
-  with Not_found ->
-    let new_blocks, free_pc = st.new_blocks in
-    st.new_blocks <- new_blocks, free_pc + 1;
-    Hashtbl.add st.cps_pc_of_direct pc free_pc;
-    free_pc
+  let new_blocks, free_pc = st.new_blocks in
+  let cps_pc, free_pc = mk_cps_pc_of_direct st.cps_pc_of_direct free_pc pc in
+  st.new_blocks <- new_blocks, free_pc;
+  cps_pc
 
 let cps_cont_of_direct ~st (pc, args) = mk_cps_pc_of_direct ~st pc, args
 
@@ -310,7 +314,7 @@ let tail_call ~st ?(instrs = []) ~exact ~check ~f args loc =
 
 let cps_branch ~st ~src (pc, args) loc =
   match Addr.Set.mem pc st.blocks_to_transform with
-  | false -> [], (Branch (pc, args), loc)
+  | false -> [], (Branch (mk_cps_pc_of_direct ~st pc, args), loc)
   | true ->
       let args, instrs =
         if List.is_empty args && Hashtbl.mem st.is_continuation pc
@@ -330,7 +334,7 @@ let cps_branch ~st ~src (pc, args) loc =
 
 let cps_jump_cont ~st ~src ((pc, _) as cont) loc =
   match Addr.Set.mem pc st.blocks_to_transform with
-  | false -> cont
+  | false -> cps_cont_of_direct ~st cont
   | true ->
       let call_block =
         let body, branch = cps_branch ~st ~src cont loc in
