@@ -398,7 +398,7 @@ let cps_last ~st ~alloc_jump_closures pc ((last, last_loc) : last * loc) ~k :
   match last with
   | Return x ->
       assert (List.is_empty alloc_jump_closures);
-      (* Is the number of successive 'returns' is unbounded is CPS, it
+      (* If the number of successive 'returns' is unbounded in CPS, it
          means that we have an unbounded of calls in direct style
          (even with tail call optimization) *)
       tail_call ~st ~exact:true ~check:false ~f:k [ x ] last_loc
