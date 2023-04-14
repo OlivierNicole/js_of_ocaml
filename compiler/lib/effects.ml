@@ -466,7 +466,6 @@ let cps_last ~st ~alloc_jump_closures pc ((last, last_loc) : last * loc) ~k :
       match Addr.Set.mem handler_pc st.blocks_to_transform with
       | false -> alloc_jump_closures, (last, last_loc)
       | true ->
-          let handler_cps_cont = cps_cont_of_direct ~st handler_cont in
           let constr_cont, exn_handler =
             allocate_continuation
               ~st
@@ -475,7 +474,8 @@ let cps_last ~st ~alloc_jump_closures pc ((last, last_loc) : last * loc) ~k :
               ~direct_pc:handler_pc
               pc
               exn
-              handler_cps_cont
+              handler_cont (* We pass the direct pc, the mapping to CPS is made
+                             by the called functions. *)
               last_loc
           in
           mark_single_version ~st exn_handler;
