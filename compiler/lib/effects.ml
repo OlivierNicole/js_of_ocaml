@@ -461,12 +461,15 @@ let cps_last ~st ~alloc_jump_closures pc ((last, last_loc) : last * loc) ~k :
       ( alloc_jump_closures
       , ( Switch (x, Array.map c1 ~f:cps_jump_cont, Array.map c2 ~f:cps_jump_cont)
         , last_loc ) )
-  | Pushtrap (body_cont, exn, ((handler_pc, _) as handler_cont), _) -> (
+  | Pushtrap (body_cont, exn, ((handler_pc, _) as handler_cont), poptraps) -> (
       assert (Hashtbl.mem st.is_continuation handler_pc);
       match Addr.Set.mem handler_pc st.blocks_to_transform with
-      | false -> alloc_jump_closures, (last, last_loc)
+      | false ->
+          let body_cont = cps_cont_of_direct ~st body_cont in
+          let handler_cont = cps_cont_of_direct ~st handler_cont in
+          let last = Pushtrap (body_cont, exn, handler_cont, poptraps) in
+          alloc_jump_closures, (last, last_loc)
       | true ->
-          let handler_cps_cont = cps_cont_of_direct ~st handler_cont in
           let constr_cont, exn_handler =
             allocate_continuation
               ~st
@@ -475,7 +478,8 @@ let cps_last ~st ~alloc_jump_closures pc ((last, last_loc) : last * loc) ~k :
               ~direct_pc:handler_pc
               pc
               exn
-              handler_cps_cont
+              handler_cont (* We pass the direct pc, the mapping to CPS is made
+                             by the called functions. *)
               last_loc
           in
           mark_single_version ~st exn_handler;
@@ -777,7 +781,25 @@ let rewrite_direct_block
   { block with body }, subst
 
 (* Apply a substitution in a set of blocks *)
-let subst_blocks blocks s =
+let subst_in_blocks blocks s =
+  Addr.Map.mapi
+    (fun pc block ->
+      if debug ()
+      then (
+        debug_print "@[<v>block before first subst: @,";
+        Code.Print.block (fun _ _ -> "") pc block;
+        debug_print "@]");
+      let res = Subst.block s block in
+      if debug ()
+      then (
+        debug_print "@[<v>block after first subst: @,";
+        Code.Print.block (fun _ _ -> "") pc res;
+        debug_print "@]");
+      res)
+    blocks
+
+    (* Apply a substitution in a set of blocks, including to bound variables *)
+let subst_bound_in_blocks blocks s =
   Addr.Map.mapi
     (fun pc block ->
       if debug ()
@@ -824,9 +846,8 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
           match name_opt with
           | Some name -> Var.Set.mem name cps_needed
           | None ->
-              (* We are handling the toplevel code. There may remain
-                 some CPS calls at toplevel. *)
-              true
+              (* The toplevel code does not need to be in CPS. *)
+              false
         in
         let blocks_to_transform, matching_exn_handler, is_continuation =
           if should_compute_needed_transformations
@@ -871,10 +892,8 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
               should_compute_needed_transformations
               && not (Var.Set.mem name lifter_functions)
           | None ->
-              (* We are handling the toplevel code. If it performs no
-                 CPS call, we can leave it in direct style and we
-                 don't need to wrap it within a [caml_callback]. *)
-              not (Addr.Set.is_empty blocks_to_transform)
+              (* The toplevel code does not need to be in CPS. *)
+              false
         in
         if debug ()
         then (
@@ -963,7 +982,7 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
             Var.Set.fold (fun v m -> Var.Map.add v (Var.fork v) m) bound Var.Map.empty
             |> Subst.from_map
           in
-          let cps_blocks = subst_blocks cps_blocks s in
+          let cps_blocks = subst_bound_in_blocks cps_blocks s in
           (* Also apply susbstitution to set of CPS calls and lifter functions *)
           st.cps_calls := Var.Set.map s !(st.cps_calls);
           st.single_version_closures := Var.Set.map s !(st.single_version_closures);
@@ -972,7 +991,7 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
              [rewrite_direct], because CPS closures are only ever defined in (toplevel)
              direct-style blocks). *)
           let direct_subst = Subst.from_map direct_subst in
-          let cps_blocks = subst_blocks cps_blocks direct_subst in
+          let cps_blocks = subst_in_blocks cps_blocks direct_subst in
           (* Also apply susbstitution to set of CPS calls and lifter functions *)
           st.cps_calls := Var.Set.map direct_subst !(st.cps_calls);
           st.single_version_closures :=
