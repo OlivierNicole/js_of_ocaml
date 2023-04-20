@@ -42,7 +42,8 @@ val from_map : Var.t Var.Map.t -> Var.t -> Var.t
 
 (** The operations of this module also substitute the variables names that
     appear on the left-hand-side of a {!constructor:Code.Let}, or as block
-    parameters, or as closure parameters. *)
+    parameters, or as closure parameters, or are bound by an exception handler.
+    *)
 module Bound : sig
   val instr : (Var.t -> Var.t) -> instr -> instr
 

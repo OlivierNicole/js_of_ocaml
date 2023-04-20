@@ -148,6 +148,25 @@ module Bound = struct
 
   let instrs s l = List.map l ~f:(fun (i, loc) -> instr s i, loc)
 
+  let last s (l, loc) =
+    let l =
+      match l with
+      | Stop -> l
+      | Branch cont -> Branch (subst_cont s cont)
+      | Pushtrap (cont1, x, cont2, pcs) ->
+          Pushtrap (subst_cont s cont1, s x, subst_cont s cont2, pcs)
+      | Return x -> Return (s x)
+      | Raise (x, k) -> Raise (s x, k)
+      | Cond (x, cont1, cont2) -> Cond (s x, subst_cont s cont1, subst_cont s cont2)
+      | Switch (x, a1, a2) ->
+          Switch
+            ( s x
+            , Array.map a1 ~f:(fun cont -> subst_cont s cont)
+            , Array.map a2 ~f:(fun cont -> subst_cont s cont) )
+      | Poptrap cont -> Poptrap (subst_cont s cont)
+    in
+    l, loc
+
   let block s block =
     { params = List.map block.params ~f:s
     ; body = instrs s block.body
