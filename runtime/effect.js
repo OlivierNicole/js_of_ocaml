@@ -42,10 +42,10 @@ is resumed first.
 The handlers are CPS-transformed functions: they actually take an
 additional parameter which is the current low-level continuation.
 
-The handlers are conceptually pairs of functions: direct-style and CPS. This is
-implemented by the CPS version of [f] being accessible as [f.cps]. Exception
-handlers are normal functions (and they are in CPS). Low-level continuations
-are also normal functions.
+Effect and exception handlers are CPS, single-version functions, meaning that
+are ordinary functions, unlike CPS-transformed functions which exist in both
+direct style and continuation-passing style.
+Low-level continuations are also ordinary functions.
 */
 
 //Provides: caml_exn_stack
@@ -141,8 +141,8 @@ function caml_perform_effect(eff, cont, k0) {
   // Move to parent fiber and execute the effect handler there
   // The handler is defined in Stdlib.Effect, so we know that the arity matches
   var k1 = caml_pop_fiber();
-  return caml_stack_check_depth()?handler.cps(eff,cont,k1,k1)
-         :caml_trampoline_return(handler,[eff,cont,k1,k1]);
+  return caml_stack_check_depth()?handler(eff,cont,k1,k1)
+         :caml_trampoline_return({cps: handler},[eff,cont,k1,k1]);
 }
 
 //Provides: caml_alloc_stack
@@ -163,7 +163,7 @@ function caml_alloc_stack(hv, hx, hf) {
     // Call [hx] in the parent fiber
     return call(2, e);
   }
-  return [0, hval, [0, hexn, 0], [0, hv, hx, hf], 0];
+  return [0, hval, [0, hexn, 0], [0, hv, hx, hf.cps], 0];
 }
 
 //Provides: caml_alloc_stack
