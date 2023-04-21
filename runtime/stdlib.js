@@ -67,7 +67,7 @@ function caml_call_gen(f, args) {
 }
 
 //Provides: caml_call_gen_tuple (const, shallow)
-//Requires: caml_fiber_stack
+//Requires: caml_fiber_stack, caml_cps_closure
 //If: effects
 //Weakdef
 var caml_call_gen_tuple = (
@@ -82,8 +82,7 @@ var caml_call_gen_tuple = (
         return caml_call_gen_direct(f.apply(null, args.slice(0,n)), args.slice(n));
       } else {
         // FIXME: Restore the optimization of handling specially d = 1 or 2
-        return [
-          0,
+        var ret = caml_cps_closure(
           function (){
             var extra_args = (arguments.length == 0)?1:arguments.length;
             var nargs = new Array(args.length+extra_args);
@@ -99,7 +98,10 @@ var caml_call_gen_tuple = (
             var cont = nargs[argsLen + extra_args - 1];
             return caml_call_gen_cps(f, nargs);
           }
-        ];
+        );
+        ret.l = d;
+        ret.cps.l = d + 1;
+        return ret;
       }
     }
     function caml_call_gen_cps(f, args) {
@@ -123,8 +125,8 @@ var caml_call_gen_tuple = (
       } else {
         argsLen--;
         var k = args[argsLen];
-        return k (
-          [ 0,
+        var cont =
+          caml_cps_closure(
             function (){
               var extra_args = (arguments.length == 0)?1:arguments.length;
               var nargs = new Array(argsLen+extra_args);
@@ -138,7 +140,10 @@ var caml_call_gen_tuple = (
               for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
               for(var i = 0; i < arguments.length; i++ ) nargs[argsLen+i] = arguments[i];
               return caml_call_gen_cps(f, nargs)
-            } ]);
+            } );
+        cont.l = d;
+        cont.cps.l = d + 1;
+        return k(cont);
       }
     }
     return [caml_call_gen_direct, caml_call_gen_cps]
