@@ -960,56 +960,61 @@ let parallel_renaming params args continuation queue =
 
 (****)
 
-
 let apply_fun_raw =
   let cps_field = Utf8_string.of_string_exn "cps" in
   fun ctx f params exact cps single_version ->
-  let n = List.length params in
-  let apply_directly f params = J.call f params J.N in
-  let apply cps single =
-    (* Adapt if [f] is a (direct-style, CPS) closure pair *)
-    let real_closure =
-      if (not (Config.Flag.effects ())) || not cps || single
-      then f
-      else (* Effects enabled, CPS version, not single-version *)
-        J.EDot (f, J.ANormal, cps_field)
+    let n = List.length params in
+    let apply_directly f params = J.call f params J.N in
+    let apply cps single =
+      (* Adapt if [f] is a (direct-style, CPS) closure pair *)
+      let real_closure =
+        if (not (Config.Flag.effects ())) || (not cps) || single
+        then f
+        else
+          (* Effects enabled, CPS version, not single-version *)
+          J.EDot (f, J.ANormal, cps_field)
+      in
+      (* We skip the arity check when we know that we have the right
+         number of parameters, since this test is expensive. *)
+      if exact
+      then apply_directly real_closure params
+      else
+        let l = Utf8_string.of_string_exn "l" in
+        J.ECond
+          ( J.EBin
+              ( J.EqEq
+              , J.ECond
+                  ( J.EBin (J.Ge, J.dot real_closure l, int 0)
+                  , J.dot real_closure l
+                  , J.EBin
+                      ( J.Eq
+                      , J.dot real_closure l
+                      , J.dot real_closure (Utf8_string.of_string_exn "length") ) )
+              , int n )
+          , apply_directly real_closure params
+          , J.call
+              (* Note: [caml_call_gen*] functions takes a two-version function *)
+              (runtime_fun ctx (if cps then "caml_call_gen_cps" else "caml_call_gen"))
+              [ f; J.array params ]
+              J.N )
     in
-    (* We skip the arity check when we know that we have the right
-       number of parameters, since this test is expensive. *)
-    if exact
-    then apply_directly real_closure params
-    else
-      let l = Utf8_string.of_string_exn "l" in
+    if cps
+    then (
+      assert (Config.Flag.effects ());
+      (* When supporting effect, we systematically perform tailcall
+         optimization. To implement it, we check the stack depth and
+         bounce to a trampoline if needed, to avoid a stack overflow.
+         The trampoline then performs the call in an shorter stack. *)
+      let f =
+        if single_version
+        then J.(EObj [ Property (PNS (Utf8_string.of_string_exn "cps"), f) ])
+        else f
+      in
       J.ECond
-        ( J.EBin
-            ( J.EqEq
-            , J.ECond
-                ( J.EBin (J.Ge, J.dot real_closure l, int 0)
-                , J.dot real_closure l
-                , J.EBin
-                    ( J.Eq
-                    , J.dot real_closure l
-                    , J.dot real_closure (Utf8_string.of_string_exn "length") ) )
-            , int n )
-        , apply_directly real_closure params
-        , J.call
-            (* Note: [caml_call_gen*] functions takes a two-version function *)
-            (runtime_fun ctx (if cps then "caml_call_gen_cps" else "caml_call_gen"))
-            [ f; J.array params ]
-            J.N )
-  in
-  if cps
-  then (
-    assert (Config.Flag.effects ());
-    (* When supporting effect, we systematically perform tailcall
-       optimization. To implement it, we check the stack depth and
-       bounce to a trampoline if needed, to avoid a stack overflow.
-       The trampoline then performs the call in an shorter stack. *)
-    J.ECond
-      ( J.call (runtime_fun ctx "caml_stack_check_depth") [] J.N
-      , apply cps single_version
-      , J.call (runtime_fun ctx "caml_trampoline_return") [ f; J.array params ] J.N ))
-  else apply cps single_version
+        ( J.call (runtime_fun ctx "caml_stack_check_depth") [] J.N
+        , apply cps single_version
+        , J.call (runtime_fun ctx "caml_trampoline_return") [ f; J.array params ] J.N ))
+    else apply cps single_version
 
 let generate_apply_fun ctx { arity; exact; cps; single_version } =
   let f' = Var.fresh_n "f" in
