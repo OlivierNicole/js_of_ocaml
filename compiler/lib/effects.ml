@@ -261,7 +261,7 @@ type st =
   ; cfg : control_flow_graph
   ; idom : (int, int) Hashtbl.t
   ; jc : jump_closures
-  ; closure_info : (Addr.t, Var.t * (Addr.t * Addr.t * Var.t list)) Hashtbl.t
+  ; closure_info : (Addr.t, Var.t list * (Addr.t * Var.t list)) Hashtbl.t
   ; cps_needed : Var.Set.t
   ; blocks_to_transform : Addr.Set.t
   ; is_continuation : (Addr.t, [ `Param of Var.t | `Loop ]) Hashtbl.t
@@ -298,6 +298,7 @@ let closure_of_pc ~st pc =
   try Addr.Map.find pc st.jc.closure_of_jump with Not_found -> assert false
 
 let allocate_closure ~st ~params ~body ~branch loc =
+  debug_print "@[<v>allocate_closure ~branch:(%a)@,@]" Code.Print.last branch;
   let block = { params = []; body; branch } in
   let pc = add_block st block in
   let name = Var.fresh () in
@@ -342,6 +343,37 @@ let cps_jump_cont ~st ~src ((pc, _) as cont) loc =
       in
       call_block, []
 
+let do_alloc_jump_closures ~st to_allocate =
+  List.map to_allocate ~f:(fun (cname, jump_pc) ->
+      let params =
+        let jump_block = Addr.Map.find jump_pc st.blocks in
+        (* For a function to be used as a continuation, it needs
+           exactly one parameter. So, we add a parameter if
+           needed. *)
+        if List.is_empty jump_block.params && Hashtbl.mem st.is_continuation jump_pc
+        then
+          (* We reuse the name of the value of the tail call of
+             one a the previous blocks. When there is a single
+             previous block, this is exactly what we want. For a
+             merge node, the variable is not used so we can just
+             as well use it. For a loop, we don't want the
+             return value of a call right before entering the
+             loop to be overriden by the value returned by the
+             last call in the loop. So, we may need to use an
+             additional closure to bind it, and we have to use a
+             fresh variable here *)
+          let x =
+            match Hashtbl.find st.is_continuation jump_pc with
+            | `Param x -> x
+            | `Loop -> Var.fresh ()
+          in
+          [ x ]
+        else jump_block.params
+      in
+      mark_single_version ~st cname;
+      let cps_jump_pc = mk_cps_pc_of_direct ~st jump_pc in
+      Let (cname, Closure (params, (cps_jump_pc, []))), noloc)
+
 let allocate_continuation
     ~st
     ~alloc_jump_closures
@@ -351,6 +383,11 @@ let allocate_continuation
     x
     cont
     loc =
+  debug_print
+    "@[<v>allocate_continuation ~direct_pc:%d ~src_pc:%d ~cont_pc:%d@,@]"
+    direct_pc
+    src_pc
+    (fst cont);
   (* We need to allocate an additional closure if [cont]
      does not correspond to a continuation that binds [x].
      This closure binds the return value [x], allocates
@@ -381,12 +418,15 @@ let allocate_continuation
       else if is_merge_node st.cfg direct_pc
       then [], alloc_jump_closures
       else
-        List.partition
-          ~f:(fun (i, _) ->
-            match i with
-            | Let (_, Closure (_, (pc'', []))) -> dominates st.cfg st.idom direct_pc pc''
-            | _ -> assert false)
-          alloc_jump_closures
+        let to_allocate =
+          try Addr.Map.find src_pc st.jc.closures_of_alloc_site with Not_found -> []
+        in
+        let inner, outer =
+          List.partition
+            ~f:(fun (_, pc'') -> dominates st.cfg st.idom direct_pc pc'')
+            to_allocate
+        in
+        do_alloc_jump_closures ~st inner, do_alloc_jump_closures ~st outer
     in
     let body, branch =
       allocate_closure ~st ~params:[ x ] ~body:(inner_closures @ body) ~branch loc
@@ -478,8 +518,9 @@ let cps_last ~st ~alloc_jump_closures pc ((last, last_loc) : last * loc) ~k :
               ~direct_pc:handler_pc
               pc
               exn
-              handler_cont (* We pass the direct pc, the mapping to CPS is made
-                             by the called functions. *)
+              handler_cont
+              (* We pass the direct pc, the mapping to CPS is made
+                 by the called functions. *)
               last_loc
           in
           mark_single_version ~st exn_handler;
@@ -502,42 +543,155 @@ let cps_last ~st ~alloc_jump_closures pc ((last, last_loc) : last * loc) ~k :
             @ ((Let (exn_handler, Prim (Extern "caml_pop_trap", [])), noloc) :: body)
           , branch ))
 
-let cps_instr ~st (instr : instr) : instr list * Var.t Var.Map.t =
+module DuplicateSt : sig
+  type st = Addr.t Addr.Map.t * Addr.t * block Addr.Map.t
+
+  type 'a m = st -> st * 'a
+
+  val return : 'a -> 'a m
+
+  val ( let* ) : 'a m -> ('a -> 'b m) -> 'b m
+
+  val run : 'a m -> st -> st * 'a
+
+  val find_or_add_pc : Addr.t -> Addr.t m
+
+  val add_block : Addr.t -> block -> unit m
+
+  val list_fold_left : f:('acc -> 'a -> 'acc m) -> init:'acc -> 'a list -> 'acc m
+
+  val array_map : f:('a -> 'b m) -> 'a array -> 'b array m
+end = struct
+  type st = Addr.t Addr.Map.t * Addr.t * block Addr.Map.t
+
+  type 'a m = st -> st * 'a
+
+  let return x st = st, x
+
+  let bind f g st =
+    let st, a = f st in
+    g a st
+
+  let ( let* ) f g st = bind f g st
+
+  let run f st = f st
+
+  let find_or_add_pc pc (new_pc_of_old, free_pc, new_blocks) =
+    try (new_pc_of_old, free_pc, new_blocks), Addr.Map.find pc new_pc_of_old
+    with Not_found ->
+      (Addr.Map.add pc free_pc new_pc_of_old, free_pc + 1, new_blocks), free_pc
+
+  let add_block pc block (new_pc_of_old, free_pc, new_blocks) =
+    (new_pc_of_old, free_pc, Addr.Map.add pc block new_blocks), ()
+
+  let list_fold_left ~(f : 'acc -> 'a -> 'b m) ~(init : 'acc) (l : 'a list) (st : st) =
+    List.fold_left
+      l
+      ~f:(fun (st, acc) x ->
+        let st, acc = f acc x st in
+        st, acc)
+      ~init:(st, init)
+
+  let array_map ~f arr st = Array.fold_left_map arr ~f:(fun st x -> f x st) ~init:st
+end
+
+let duplicate_code ~st pc =
+  let rec duplicate ~blocks pc state =
+    Code.traverse
+      { fold = Code.fold_children }
+      (fun pc (state, ()) ->
+        state
+        |> DuplicateSt.run
+             (let open DuplicateSt in
+             let block = Addr.Map.find pc st.blocks in
+             (* Also duplicate nested functions *)
+             let* rev_new_body =
+               list_fold_left
+                 block.body
+                 ~f:(fun body_acc (instr, loc) ->
+                   match instr with
+                   | Let (f, Closure (params, (pc', args))) ->
+                       let* () = duplicate ~blocks pc' in
+                       let* new_pc' = find_or_add_pc pc' in
+                       return
+                         ((Let (f, Closure (params, (new_pc', args))), loc) :: body_acc)
+                   | i -> return ((i, loc) :: body_acc))
+                 ~init:[]
+             in
+             let new_body = List.rev rev_new_body in
+             (* Update branch targets *)
+             let update (pc, args) =
+               let* pc = find_or_add_pc pc in
+               return (pc, args)
+             in
+             let* branch =
+               match block.branch with
+               | ((Return _ | Raise _ | Stop) as b), loc -> return (b, loc)
+               | Branch cont, loc ->
+                   let* cont = update cont in
+                   return (Branch cont, loc)
+               | Cond (x, c1, c2), loc ->
+                   let* c1 = update c1 in
+                   let* c2 = update c2 in
+                   return (Cond (x, c1, c2), loc)
+               | Switch (x, conts_block, conts_int), loc ->
+                   let* conts_block = array_map conts_block ~f:update in
+                   let* conts_int = array_map ~f:update conts_int in
+                   return (Switch (x, conts_block, conts_int), loc)
+               | Pushtrap (c1, x, c2, poptraps), loc ->
+                   let* c1 = update c1 in
+                   let* c2 = update c2 in
+                   return (Pushtrap (c1, x, c2, poptraps), loc)
+               | Poptrap cont, loc ->
+                   let* cont = update cont in
+                   return (Poptrap cont, loc)
+             in
+             let new_block = { block with body = new_body; branch } in
+             let* new_pc = find_or_add_pc pc in
+             let* () = add_block new_pc new_block in
+             return ()))
+      pc
+      blocks
+      (state, ())
+  in
+  let new_blocks, free_pc = st.new_blocks in
+  let (new_pc_of_old, free_pc, new_blocks), () =
+    duplicate ~blocks:st.blocks pc (Addr.Map.empty, free_pc, new_blocks)
+  in
+  st.new_blocks <- new_blocks, free_pc;
+  Addr.Map.find pc new_pc_of_old
+
+let cps_instr ~st ~lifter_functions (instr : instr) : instr list * Var.t Var.Map.t =
   match instr with
-  | Let (x, Closure (params, (pc, _)))
-    when Var.Set.mem x st.cps_needed && not (Var.Set.mem x !(st.single_version_closures)) ->
-      (* FIXME remove
-      (* Add the continuation parameter, and change the initial block if
-         needed *)
-      let k, cont = Hashtbl.find st.closure_info pc in
-      Let (x, Closure (params @ [ k ], cont))
-      *)
-      (* Due to the preliminary lambda lifting, all functions should be created
-         at toplevel. However, toplevel code may need to be CPS-transformed if
-         it contains uses of [%resume]. In such cases, we transform the
-         function into a two-version (direct, CPS) function. *)
+  | Let (x, Closure (params, ((pc, _) as cont)))
+    when Var.Set.mem x st.cps_needed && not (Var.Set.mem x !(st.single_version_closures))
+    ->
       let direct_c = Var.fork x in
       let cps_c = Var.fork x in
-      let params' = List.map ~f:Var.fork params in
-      let subst =
-        List.fold_left2
-          ~f:(fun m p p' -> Var.Map.add p p' m)
-          ~init:Var.Map.empty
-          params
-          params'
-      in
-      let k, (direct_start, cps_start, args) = Hashtbl.find st.closure_info pc in
-      ( [ Let (direct_c, Closure (params, (direct_start, args)))
-        ; Let (cps_c, Closure (params' @ [ k ], (cps_start, args)))
+      let cps_params, cps_cont = Hashtbl.find st.closure_info pc in
+      ( [ Let (direct_c, Closure (params, cont))
+        ; Let (cps_c, Closure (cps_params, cps_cont))
         ; Let (x, Prim (Extern "caml_cps_closure", [ Pv direct_c; Pv cps_c ]))
         ]
-      , subst )
+      , Var.Map.empty )
+  | Let (x, Closure (params, (pc, args)))
+    when (not (Var.Set.mem x st.cps_needed))
+         && not (Var.Set.mem x !(st.single_version_closures)) ->
+      (* This function definition does not need to be in CPS. However, we must
+         duplicate its body lest the same function body will appear twice in
+         the program with exactly the same variables that are bound, resulting
+         in double definition, which is not allowed. *)
+      let new_pc = duplicate_code ~st pc in
+      (* We leave [params] and [args] unchanged here because they will be
+         replaced with fresh variables in a later, global substitution pass. *)
+      [ Let (x, Closure (params, (new_pc, args))) ], Var.Map.empty
   | Let (x, Prim (Extern "caml_alloc_dummy_function", [ size; arity ])) -> (
       match arity with
       | Pc (Int a) ->
           ( [ Let
                 ( x
-                , Prim (Extern "caml_alloc_dummy_function", [ size; Pc (Int (Int32.succ a)) ])
+                , Prim
+                    (Extern "caml_alloc_dummy_function", [ size; Pc (Int (Int32.succ a)) ])
                 )
             ]
           , Var.Map.empty )
@@ -545,8 +699,15 @@ let cps_instr ~st (instr : instr) : instr list * Var.t Var.Map.t =
   | Let (x, Apply { f; args; _ }) when not (Var.Set.mem x st.cps_needed) ->
       (* At the moment, we turn into CPS any function not called with
          the right number of parameter *)
-      assert (Global_flow.exact_call st.flow_info f (List.length args));
+      assert (
+        (* If this function is unknown to the global flow analysis, then it was
+           introduced by the lambda lifting and does not require CPS *)
+        Var.idx f >= Var.Tbl.length st.flow_info.info_approximation
+        || Global_flow.exact_call st.flow_info f (List.length args));
       [ Let (x, Apply { f; args; exact = true }) ], Var.Map.empty
+  | Let (_, Apply { f; args = _; exact = _ }) when Var.Set.mem f lifter_functions ->
+      (* Nothing to do for lifter functions. *)
+      [ instr ], Var.Map.empty
   | Let (_, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) ->
       assert false
   | _ -> [ instr ], Var.Map.empty
@@ -559,38 +720,10 @@ let concat_union : ('a list * 'b Var.Map.t) list -> 'a list * 'b Var.Map.t =
 
 let cps_block ~st ~k ~lifter_functions ~orig_pc block =
   debug_print "cps_block %d\n" orig_pc;
+  debug_print "cps pc evaluates to %d\n" (mk_cps_pc_of_direct ~st orig_pc);
   let alloc_jump_closures =
     match Addr.Map.find orig_pc st.jc.closures_of_alloc_site with
-    | to_allocate ->
-        List.map to_allocate ~f:(fun (cname, jump_pc) ->
-            let params =
-              let jump_block = Addr.Map.find jump_pc st.blocks in
-              (* For a function to be used as a continuation, it needs
-                 exactly one parameter. So, we add a parameter if
-                 needed. *)
-              if List.is_empty jump_block.params && Hashtbl.mem st.is_continuation jump_pc
-              then
-                (* We reuse the name of the value of the tail call of
-                   one a the previous blocks. When there is a single
-                   previous block, this is exactly what we want. For a
-                   merge node, the variable is not used so we can just
-                   as well use it. For a loop, we don't want the
-                   return value of a call right before entering the
-                   loop to be overriden by the value returned by the
-                   last call in the loop. So, we may need to use an
-                   additional closure to bind it, and we have to use a
-                   fresh variable here *)
-                let x =
-                  match Hashtbl.find st.is_continuation jump_pc with
-                  | `Param x -> x
-                  | `Loop -> Var.fresh ()
-                in
-                [ x ]
-              else jump_block.params
-            in
-            mark_single_version ~st cname;
-            let cps_jump_pc = mk_cps_pc_of_direct ~st jump_pc in
-            Let (cname, Closure (params, (cps_jump_pc, []))), noloc)
+    | to_allocate -> do_alloc_jump_closures ~st to_allocate
     | exception Not_found -> []
   in
 
@@ -609,7 +742,11 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
         Some
           (fun ~k ->
             let exact =
-              exact || Global_flow.exact_call st.flow_info f (List.length args)
+              exact
+              (* If this function is unknown to the global flow analysis, then it was
+                 introduced by the lambda lifting and is exact *)
+              || Var.idx f >= Var.Tbl.length st.flow_info.info_approximation
+              || Global_flow.exact_call st.flow_info f (List.length args)
             in
             tail_call ~st ~exact ~check:true ~f (args @ [ k ]) loc)
     | Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ]) ->
@@ -645,8 +782,7 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
             assert (Var.equal x ret);
             let instrs, branch = f ~k in
             body_prefix, instrs, branch)
-    | Some (body_prefix, (Let (x, e), loc)), (Branch (direct_pc, _ as cont), loc_ret) ->
-        let cps_cont = cps_cont_of_direct ~st cont in
+    | Some (body_prefix, (Let (x, e), loc)), (Branch ((direct_pc, _) as cont), loc_ret) ->
         Option.map (rewrite_instr x e loc) ~f:(fun f ->
             let constr_cont, k' =
               allocate_continuation
@@ -656,7 +792,9 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
                 ~direct_pc
                 orig_pc
                 x
-                cps_cont
+                cont
+                (* We pass the direct pc, the mapping to CPS is made by
+                   the called functions. *)
                 loc_ret
             in
             let instrs, branch = f ~k:k' in
@@ -673,7 +811,7 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
           (* For each instruction... *)
           List.map body_prefix ~f:(fun (i, loc) ->
               (* ... apply [cps_instr] ... *)
-              let instrs, subst = cps_instr ~st i in
+              let instrs, subst = cps_instr ~st ~lifter_functions i in
               (* ... and decorate all resulting instructions with [loc] *)
               List.map ~f:(fun i -> i, loc) instrs, subst)
           |> concat_union (* Merge the resulting variable substitutions into one *)
@@ -687,7 +825,7 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
           (* For each instruction... *)
           List.map block.body ~f:(fun (i, loc) ->
               (* ... apply [cps_instr] ... *)
-              let instrs, subst = cps_instr ~st i in
+              let instrs, subst = cps_instr ~st ~lifter_functions i in
               (* ... and decorate all resulting instructions with [loc] *)
               List.map ~f:(fun i -> i, loc) instrs, subst)
           |> concat_union (* Merge the resulting variable substitutions into one *)
@@ -721,21 +859,13 @@ let rewrite_direct_block
     block =
   debug_print "@[<v>rewrite_direct_block %d@,@]" pc;
   let rewrite_instr subst = function
-    | Let (x, Closure (params, (pc, _)))
+    | Let (x, Closure (params, ((pc, _) as cont)))
       when Var.Set.mem x cps_needed && not (Var.Set.mem x lifter_functions) ->
         let direct_c = Var.fork x in
         let cps_c = Var.fork x in
-        let params' = List.map ~f:Var.fork params in
-        let subst =
-          List.fold_left2
-            ~f:(fun m p p' -> Var.Map.add p p' m)
-            ~init:subst
-            params
-            params'
-        in
-        let k, (direct_start, cps_start, args) = Hashtbl.find closure_info pc in
-        ( [ Let (direct_c, Closure (params, (direct_start, args)))
-          ; Let (cps_c, Closure (params' @ [ k ], (cps_start, args)))
+        let cps_params, cps_cont = Hashtbl.find closure_info pc in
+        ( [ Let (direct_c, Closure (params, cont))
+          ; Let (cps_c, Closure (cps_params, cps_cont))
           ; Let (x, Prim (Extern "caml_cps_closure", [ Pv direct_c; Pv cps_c ]))
           ]
         , subst )
@@ -798,7 +928,7 @@ let subst_in_blocks blocks s =
       res)
     blocks
 
-    (* Apply a substitution in a set of blocks, including to bound variables *)
+(* Apply a substitution in a set of blocks, including to bound variables *)
 let subst_bound_in_blocks blocks s =
   Addr.Map.mapi
     (fun pc block ->
@@ -826,7 +956,7 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
   let p =
     Code.fold_closures_innermost_first
       p
-      (fun name_opt _ (start, args) ({ blocks; free_pc; _ } as p) ->
+      (fun name_opt params (start, args) ({ blocks; free_pc; _ } as p) ->
         Option.iter name_opt ~f:(fun v -> debug_print "cname = %s" @@ Var.to_string v);
         (* We speculatively add a block at the beginning of the
            function. In case of tail-recursion optimization, the
@@ -863,7 +993,8 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
         let closure_jc = jump_closures blocks_to_transform idom in
         let start, args, blocks, free_pc =
           (* Insert an initial block if needed. *)
-          if Addr.Map.mem start' closure_jc.closures_of_alloc_site
+          if should_compute_needed_transformations
+             && Addr.Map.mem start' closure_jc.closures_of_alloc_site
           then start', [], blocks', free_pc + 1
           else start, args, blocks, free_pc
         in
@@ -918,34 +1049,50 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
                 to take into account the fact that some closure are turned into
                 (direct style closure, CPS closure) pairs, and modify uses of the
                 %resume and %perform primitives. *)
-          let transform_block =
+          let param_subst, transform_block =
             if function_needs_cps
             then (
               let k = Var.fresh_n "cont" in
               let cps_start = mk_cps_pc_of_direct ~st start in
-              Hashtbl.add st.closure_info initial_start (k, (start, cps_start, args));
-              fun pc block ->
-                let cps_block, subst = cps_block ~st ~lifter_functions ~k ~orig_pc:pc block in
-                ( rewrite_direct_block
-                    ~cps_needed
-                    ~closure_info:st.closure_info
-                    ~ident_fn
-                    ~pc
-                    ~lifter_functions
-                    ~subst
-                    block
-                , Some cps_block ))
+              let params' = List.map ~f:Var.fork params in
+              let subst =
+                List.fold_left2
+                  ~f:(fun m p p' -> Var.Map.add p p' m)
+                  ~init:Var.Map.empty
+                  params
+                  params'
+              in
+              let cps_args = List.map ~f:(Subst.from_map subst) args in
+              Hashtbl.add
+                st.closure_info
+                initial_start
+                (params' @ [ k ], (cps_start, cps_args));
+              ( subst
+              , fun pc block ->
+                  let cps_block, subst =
+                    cps_block ~st ~lifter_functions ~k ~orig_pc:pc block
+                  in
+                  ( rewrite_direct_block
+                      ~cps_needed
+                      ~closure_info:st.closure_info
+                      ~ident_fn
+                      ~pc
+                      ~lifter_functions
+                      ~subst
+                      block
+                  , Some cps_block ) ))
             else
-              fun pc block ->
-              ( rewrite_direct_block
-                  ~cps_needed
-                  ~closure_info:st.closure_info
-                  ~ident_fn
-                  ~pc
-                  ~lifter_functions
-                  ~subst:Var.Map.empty
-                  block
-              , None )
+              ( Var.Map.empty
+              , fun pc block ->
+                  ( rewrite_direct_block
+                      ~cps_needed
+                      ~closure_info:st.closure_info
+                      ~ident_fn
+                      ~pc
+                      ~lifter_functions
+                      ~subst:Var.Map.empty
+                      block
+                  , None ) )
           in
           let blocks, direct_subst =
             Code.traverse
@@ -990,12 +1137,14 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
              substituted by the CPS version of that parameter in CPS blocks (generated by
              [rewrite_direct], because CPS closures are only ever defined in (toplevel)
              direct-style blocks). *)
-          let direct_subst = Subst.from_map direct_subst in
-          let cps_blocks = subst_in_blocks cps_blocks direct_subst in
+          let subst =
+            Subst.from_map
+            @@ Var.Map.union (fun _ _ -> assert false) direct_subst param_subst
+          in
+          let cps_blocks = subst_in_blocks cps_blocks subst in
           (* Also apply susbstitution to set of CPS calls and lifter functions *)
-          st.cps_calls := Var.Set.map direct_subst !(st.cps_calls);
-          st.single_version_closures :=
-            Var.Set.map direct_subst !(st.single_version_closures);
+          st.cps_calls := Var.Set.map subst !(st.cps_calls);
+          st.single_version_closures := Var.Set.map subst !(st.single_version_closures);
           let blocks = Addr.Map.fold Addr.Map.add cps_blocks blocks in
           blocks, free_pc
         in
@@ -1005,9 +1154,8 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
   let p =
     match Hashtbl.find_opt closure_info p.start with
     | None -> p
-    | Some (k, (_, cps_start, _)) ->
+    | Some (cps_params, cps_cont) ->
         (* Call [caml_trampoline_cps] to set up the execution context. *)
-        (* FIXME used to be [caml_callback], but probably unneeded, FIXME confirm that *)
         let new_start = p.free_pc in
         let blocks =
           let main = Var.fresh () in
@@ -1017,9 +1165,10 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
             new_start
             { params = []
             ; body =
-                [ Let (main, Closure ([ k ], (cps_start, []))), noloc
+                [ Let (main, Closure (cps_params, cps_cont)), noloc
                 ; Let (args, Prim (Extern "%js_array", [])), noloc
-                ; Let (res, Prim (Extern "caml_trampoline_cps", [ Pv main; Pv args ])), noloc
+                ; ( Let (res, Prim (Extern "caml_trampoline_cps", [ Pv main; Pv args ]))
+                  , noloc )
                 ]
             ; branch = Return res, noloc
             }
@@ -1029,8 +1178,7 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
         let blocks =
           Code.traverse
             { fold = Code.fold_children }
-            (fun pc blocks ->
-              Addr.Map.remove pc blocks)
+            (fun pc blocks -> Addr.Map.remove pc blocks)
             p.start
             blocks
             blocks
@@ -1069,95 +1217,13 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
 
 (****)
 
-let current_loop_header frontiers in_loop pc =
-  (* We remain in a loop while the loop header is in the dominance frontier.
-     We enter a loop when the block is in its dominance frontier. *)
-  let frontier = get_edges frontiers pc in
-  match in_loop with
-  | Some header when Addr.Set.mem header frontier -> in_loop
-  | _ -> if Addr.Set.mem pc frontier then Some pc else None
-
-let wrap_call ~cps_needed p x f args accu loc =
-  let arg_array = Var.fresh () in
-  ( p
-  , Var.Set.remove x cps_needed
-  , [ Let (arg_array, Prim (Extern "%js_array", List.map ~f:(fun y -> Pv y) args)), noloc
-    ; Let (x, Prim (Extern "caml_callback", [ Pv f; Pv arg_array ])), loc
-    ]
-    :: accu )
-
-let wrap_primitive ~cps_needed p x e accu loc =
-  let f = Var.fresh () in
-  let closure_pc = p.free_pc in
-  ( { p with
-      free_pc = p.free_pc + 1
-    ; blocks =
-        Addr.Map.add
-          closure_pc
-          (let y = Var.fresh () in
-           { params = []; body = [ Let (y, e), loc ]; branch = Return y, loc })
-          p.blocks
-    }
-  , Var.Set.remove x (Var.Set.add f cps_needed)
-  , let args = Var.fresh () in
-    [ Let (f, Closure ([], (closure_pc, []))), noloc
-    ; Let (args, Prim (Extern "%js_array", [])), noloc
-    ; Let (x, Prim (Extern "caml_callback", [ Pv f; Pv args ])), loc
-    ]
-    :: accu )
-
-let rewrite_toplevel_instr (p, cps_needed, accu) instr =
-  match instr with
-  | Let (x, Apply { f; args; _ }), loc when Var.Set.mem x cps_needed ->
-      wrap_call ~cps_needed p x f args accu loc
-  | Let (x, (Prim (Extern ("%resume" | "%perform" | "%reperform"), _) as e)), loc ->
-      wrap_primitive ~cps_needed p x e accu loc
-  | _ -> p, cps_needed, [ instr ] :: accu
-
-(* FIXME remove? *)
-(* Wrap function calls inside [caml_callback] at toplevel to avoid
-   unncessary function nestings. This is not done inside loops since
-   using repeatedly [caml_callback] can be costly. *)
-let[@warning "-32"] rewrite_toplevel ~cps_needed p =
-  let { start; blocks; _ } = p in
-  let cfg = build_graph blocks start in
-  let idom = dominator_tree cfg in
-  let frontiers = dominance_frontier cfg idom in
-  let rec traverse visited (p : Code.program) cps_needed in_loop pc =
-    if Addr.Set.mem pc visited
-    then visited, p, cps_needed
-    else
-      let visited = Addr.Set.add pc visited in
-      let in_loop = current_loop_header frontiers in_loop pc in
-      let p, cps_needed =
-        if Option.is_none in_loop
-        then
-          let block = Addr.Map.find pc p.blocks in
-          let p, cps_needed, body_rev =
-            List.fold_left ~f:rewrite_toplevel_instr ~init:(p, cps_needed, []) block.body
-          in
-          let body = List.concat @@ List.rev body_rev in
-          { p with blocks = Addr.Map.add pc { block with body } p.blocks }, cps_needed
-        else p, cps_needed
-      in
-      Code.fold_children
-        blocks
-        pc
-        (fun pc (visited, p, cps_needed) -> traverse visited p cps_needed in_loop pc)
-        (visited, p, cps_needed)
-  in
-  let _, p, cps_needed = traverse Addr.Set.empty p cps_needed None start in
-  p, cps_needed
-
-(****)
-
-let split_blocks ~cps_needed (p : Code.program) =
+let split_blocks ~cps_needed ~lifter_functions (p : Code.program) =
   (* Ensure that function applications and effect primitives are in
      tail position *)
   let split_block pc block p =
     let is_split_point i r branch =
       match i with
-      | Let (x, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) ->
+      | Let (x, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) -> (
           ((not (List.is_empty r))
           ||
           match fst branch with
@@ -1165,6 +1231,11 @@ let split_blocks ~cps_needed (p : Code.program) =
           | Return x' -> not (Var.equal x x')
           | _ -> true)
           && Var.Set.mem x cps_needed
+          &&
+          match i with
+          | Let (_, Apply { f; args = _; exact = _ }) ->
+              not (Var.Set.mem f lifter_functions)
+          | _ -> true)
       | _ -> false
     in
     let rec split (p : Code.program) pc block accu l branch =
@@ -1257,24 +1328,35 @@ let remove_empty_blocks ~live_vars (p : Code.program) : Code.program =
 
 let f (p, live_vars) =
   let t = Timer.make () in
-  let p, lifter_functions = Lambda_lifting_simple.f p in
+  let p = remove_empty_blocks ~live_vars p in
+  let flow_info = Global_flow.f ~fast:false p in
+  let cps_needed = Partial_cps_analysis.f p flow_info in
+  debug_print "@[<v>cps_needed = @[<hov 2>";
+  Var.Set.iter (fun v -> debug_print "%s,@ " (Var.to_string v)) cps_needed;
+  debug_print "@]@,@]";
+  let p, lifter_functions, liftings = Lambda_lifting_simple.f ~to_lift:cps_needed p in
+  let cps_needed =
+    Var.Set.map (fun f -> try Subst.from_map liftings f with Not_found -> f) cps_needed
+  in
   if debug ()
   then (
     debug_print "@[<v>Lifting closures:@,";
     lifter_functions |> Var.Set.iter (fun v -> debug_print "%s,@ " (Var.to_string v));
     debug_print "@]";
+    debug_print "@[<v>cps_needed (after lifting) = @[<hov 2>";
+    Var.Set.iter (fun v -> debug_print "%s,@ " (Var.to_string v)) cps_needed;
+    debug_print "@]@,@]";
     debug_print "@[<v>After lambda lifting...@,";
     Code.Print.program (fun _ _ -> "") p;
     debug_print "@]");
-  let p = remove_empty_blocks ~live_vars p in
-  let flow_info = Global_flow.f ~fast:false p in
-  let cps_needed = Partial_cps_analysis.f p flow_info in
-  (* FIXME incompatible with dynamic switching?
-     let p, cps_needed = rewrite_toplevel ~cps_needed p in
-  *)
-  let p = split_blocks ~cps_needed p in
+  let p = split_blocks ~cps_needed ~lifter_functions p in
   let p, cps_calls, single_version_closures =
     cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p
   in
   if Debug.find "times" () then Format.eprintf "  effects: %a@." Timer.print t;
+  if debug ()
+  then (
+    debug_print "@[<v>After CPS transform:@,";
+    Code.Print.program (fun _ _ -> "") p;
+    debug_print "@]");
   p, cps_calls, single_version_closures
