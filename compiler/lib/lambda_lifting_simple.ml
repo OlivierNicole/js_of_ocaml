@@ -77,32 +77,37 @@ let mark_bound_variables var_depth block depth =
           List.iter params ~f:(fun x -> var_depth.(Var.idx x) <- depth + 1)
       | _ -> ())
 
-let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) pc depth :
-    _ * _ * Var.Set.t =
+let rec traverse
+    ~to_lift
+    var_depth
+    (program, (functions : (instr * loc) list), lifters)
+    pc
+    depth : _ * _ * (Var.Set.t * Var.t Var.Map.t) =
   Code.preorder_traverse
     { fold = Code.fold_children }
-    (fun pc (program, functions, lifted) ->
+    (fun pc (program, functions, lifters) ->
       let block = Code.Addr.Map.find pc program.blocks in
       mark_bound_variables var_depth block depth;
       if depth = 0
       then (
         assert (List.is_empty functions);
-        let program, body, lifted' =
+        let program, body, lifters' =
           List.fold_right
             block.body
-            ~init:(program, [], Var.Set.empty)
-            ~f:(fun (i, loc) (program, rem, lifted) ->
+            ~init:(program, [], (Var.Set.empty, Var.Map.empty))
+            ~f:(fun (i, loc) (program, rem, lifters) ->
               match i with
               | Let (_, Closure (_, (pc', _))) as i ->
-                  let program, functions, lifted =
-                    traverse var_depth (program, [], lifted) pc' (depth + 1)
+                  let program, functions, lifters =
+                    traverse ~to_lift var_depth (program, [], lifters) pc' (depth + 1)
                   in
-                  program, List.rev_append functions ((i, loc) :: rem), lifted
-              | i -> program, (i, loc) :: rem, lifted)
+                  program, List.rev_append functions ((i, loc) :: rem), lifters
+              | i -> program, (i, loc) :: rem, lifters)
         in
         ( { program with blocks = Addr.Map.add pc { block with body } program.blocks }
         , []
-        , Var.Set.union lifted lifted' ))
+        , ( Var.Set.union (fst lifters) (fst lifters')
+          , Var.Map.union (fun _ _ -> assert false) (snd lifters) (snd lifters') ) ))
       else
         (* We lift possibly mutually recursive closures (that are created by
            contiguous statements) together. Isolated closures are lambda-lifted
@@ -114,15 +119,19 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
         in
         let rec rewrite_body
             current_contiguous
-            (st : Code.program * (instr * loc) list * Var.Set.t)
+            (st : Code.program * (instr * loc) list * (Var.Set.t * Var.t Var.Map.t))
             l =
           match l with
           | (Let (f, (Closure (_, (pc', _)) as cl)), loc) :: rem
-            when List.is_empty current_contiguous && does_not_start_with_closure rem ->
+            when List.is_empty current_contiguous
+                 && Var.Set.mem f to_lift
+                 && does_not_start_with_closure rem ->
               (* We lift an isolated closure *)
               if debug ()
               then Format.eprintf "@[<v>lifting isolated closure %s@,@]" (Var.to_string f);
-              let program, functions, lifted = traverse var_depth st pc' (depth + 1) in
+              let program, functions, lifters =
+                traverse ~to_lift var_depth st pc' (depth + 1)
+              in
               let free_vars = collect_free_vars program var_depth (depth + 1) pc' in
               if debug ()
               then (
@@ -161,16 +170,21 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
               let functions =
                 (Let (f'', Closure (List.map s ~f:snd, (pc'', []))), noloc) :: functions
               in
-              let lifted = Var.Set.add f'' lifted in
-              let rem', st = rewrite_body [] (program, functions, lifted) rem in
+              let lifters =
+                Var.Set.add f'' (fst lifters), Var.Map.add f f' (snd lifters)
+              in
+              let rem', st = rewrite_body [] (program, functions, lifters) rem in
               ( (Let (f, Apply { f = f''; args = List.map ~f:fst s; exact = true }), loc)
                 :: rem'
               , st )
           | (Let (cname, Closure (params, (pc', args))), loc) :: rem ->
-              let st = traverse var_depth st pc' (depth + 1) in
+              let st = traverse ~to_lift var_depth st pc' (depth + 1) in
               rewrite_body ((cname, params, pc', args, loc) :: current_contiguous) st rem
           | l -> (
-              assert (List.length current_contiguous <> 1);
+              assert (
+                match current_contiguous with
+                | [ (f, _, _, _, _) ] -> not (Var.Set.mem f to_lift)
+                | _ -> true);
               match current_contiguous with
               | [] -> (
                   match l with
@@ -178,8 +192,11 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
                       let rem', st = rewrite_body [] st rem in
                       i :: rem', st
                   | [] -> [], st)
-              | _ ->
-                  let program, functions, lifted =
+              | _
+                when List.exists
+                       ~f:(fun (f, _, _, _, _) -> Var.Set.mem f to_lift)
+                       current_contiguous ->
+                  let program, functions, lifters =
                     (if debug ()
                     then
                       Format.(
@@ -191,7 +208,8 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
                              current_contiguous)));
                     List.fold_left
                       current_contiguous
-                      ~f:(fun st (_, _, pc, _, _) -> traverse var_depth st pc (depth + 1))
+                      ~f:(fun st (_, _, pc, _, _) ->
+                        traverse ~to_lift var_depth st pc (depth + 1))
                       ~init:st
                   in
                   let free_vars =
@@ -261,13 +279,23 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
                     (Let (f_tuple, Closure (List.map s ~f:snd, (pc_tuple, []))), noloc)
                     :: functions
                   in
-                  let lifted = Var.Set.add f_tuple lifted in
+                  let lifters =
+                    ( Var.Set.add f_tuple (fst lifters)
+                    , Var.Map.add_seq
+                        (List.to_seq
+                        @@ List.combine
+                             (List.map current_contiguous ~f:(fun (f, _, _, _, _) -> f))
+                             f's)
+                        (snd lifters) )
+                  in
                   let rem', st =
                     match l with
                     | i :: rem ->
-                        let rem', st = rewrite_body [] (program, functions, lifted) rem in
+                        let rem', st =
+                          rewrite_body [] (program, functions, lifters) rem
+                        in
                         i :: rem', st
-                    | [] -> [], (program, functions, lifted)
+                    | [] -> [], (program, functions, lifters)
                   in
                   let tuple = Var.fresh_n "tuple" in
                   ( ( Let
@@ -277,19 +305,31 @@ let rec traverse var_depth (program, (functions : (instr * loc) list), lifted) p
                     :: List.mapi current_contiguous ~f:(fun i (f, _, _, _, loc) ->
                            Let (f, Field (tuple, i)), loc)
                     @ rem'
+                  , st )
+              | _ :: _ ->
+                  let rem, st =
+                    match l with
+                    | i :: rem ->
+                        let rem, st = rewrite_body [] st rem in
+                        i :: rem, st
+                    | [] -> [], st
+                  in
+                  ( List.map current_contiguous ~f:(fun (f, params, pc, args, loc) ->
+                        Let (f, Closure (params, (pc, args))), loc)
+                    @ rem
                   , st ))
         in
-        let body, (program, functions, lifted) =
-          rewrite_body [] (program, functions, lifted) block.body
+        let body, (program, functions, lifters) =
+          rewrite_body [] (program, functions, lifters) block.body
         in
         ( { program with blocks = Addr.Map.add pc { block with body } program.blocks }
         , functions
-        , lifted ))
+        , lifters ))
     pc
     program.blocks
-    (program, functions, lifted)
+    (program, functions, lifters)
 
-let f program =
+let f ~to_lift program =
   if debug ()
   then (
     Format.eprintf "@[<v>Program before lambda lifting:@,";
@@ -298,9 +338,14 @@ let f program =
   let t = Timer.make () in
   let nv = Var.count () in
   let var_depth = Array.make nv (-1) in
-  let program, functions, lifted =
-    traverse var_depth (program, [], Var.Set.empty) program.start 0
+  let program, functions, (lifters, liftings) =
+    traverse
+      ~to_lift
+      var_depth
+      (program, [], (Var.Set.empty, Var.Map.empty))
+      program.start
+      0
   in
   assert (List.is_empty functions);
   if Debug.find "times" () then Format.eprintf "  lambda lifting: %a@." Timer.print t;
-  program, lifted
+  program, lifters, liftings
