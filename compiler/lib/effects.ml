@@ -830,16 +830,9 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
   ; branch = last
   }
 
-(* Modify all function applications and closure creations to take into account
-   the fact that closures are turned (direct style, CPS) closure pairs. Also
-   rewrite the effect primitives to switch to the CPS version of functions (for
-   resume) or fail (for perform).
-   For each closure created in the original code, two closures are now created.
-   The parameters of the CPS closure are duplicated from the original one.
-   However, we need to maintain the invariant that all variables are bound
-   exactly once. This is done by creating fresh arguments for each CPS closure
-   and returning a substitution from the original parameters to the new ones,
-   that must be applied to all code that might use the original parameters. *)
+(* Modify all function applications and closure creations to take into account the fact
+   that some closures must now have a CPS version. Also rewrite the effect primitives to
+   switch to the CPS version of functions (for resume) or fail (for perform). *)
 let rewrite_direct_block ~cps_needed ~closure_info ~ident_fn ~pc ~lifter_functions block =
   debug_print "@[<v>rewrite_direct_block %d@,@]" pc;
   let rewrite_instr = function
@@ -1021,12 +1014,10 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
             ());
         let blocks, free_pc, bound_subst, param_subst, new_blocks =
           (* For every block in the closure,
-             1. add its CPS translation to the block map at a fresh address, if
-               needed
-             2. keep the direct-style block but modify all function applications
-                to take into account the fact that some closure are turned into
-                (direct style closure, CPS closure) pairs, and modify uses of the
-                %resume and %perform primitives. *)
+             1. add its CPS translation to the block map at a fresh address, if needed
+             2. keep the direct-style block but modify function definitions to add the CPS
+             version where needed, and turn uses of %resume and %perform into switchings
+             to CPS. *)
           let param_subst, transform_block =
             if function_needs_cps
             then (
@@ -1086,9 +1077,9 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
               st.blocks
           in
           let new_blocks_this_clos, free_pc = st.new_blocks in
-          (* Substitute all variables bound in the CPS version with fresh
-             variables to avoid clashing with the definitions in the original
-             blocks. *)
+          (* All variables bound in the CPS version will have to be subst with fresh ones
+             to avoid clashing with the definitions in the original blocks (the actual
+             substitution is done later). *)
           let bound =
             Addr.Map.fold
               (fun _ block bound ->
