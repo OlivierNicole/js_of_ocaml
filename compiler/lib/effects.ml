@@ -1122,40 +1122,6 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
     }
   in
   let p =
-    match Hashtbl.find_opt closure_info p.start with
-    | None -> p
-    | Some (cps_params, cps_cont) ->
-        (* Call [caml_trampoline_cps] to set up the execution context. *)
-        let new_start = p.free_pc in
-        let blocks =
-          let main = Var.fresh () in
-          let args = Var.fresh () in
-          let res = Var.fresh () in
-          Addr.Map.add
-            new_start
-            { params = []
-            ; body =
-                [ Let (main, Closure (cps_params, cps_cont)), noloc
-                ; Let (args, Prim (Extern "%js_array", [])), noloc
-                ; ( Let (res, Prim (Extern "caml_trampoline_cps", [ Pv main; Pv args ]))
-                  , noloc )
-                ]
-            ; branch = Return res, noloc
-            }
-            p.blocks
-        in
-        (* Remove the direct-style toplevel code as it is now unreachable *)
-        let blocks =
-          Code.traverse
-            { fold = Code.fold_children }
-            (fun pc blocks -> Addr.Map.remove pc blocks)
-            p.start
-            blocks
-            blocks
-        in
-        { start = new_start; blocks; free_pc = new_start + 1 }
-  in
-  let p =
     (* Initialize the global fiber stack and define a global identity function,
        needed to translate [%resume] *)
     let id_pc = p.free_pc in
@@ -1300,9 +1266,6 @@ let f (p, live_vars) =
   let p = remove_empty_blocks ~live_vars p in
   let flow_info = Global_flow.f ~fast:false p in
   let cps_needed = Partial_cps_analysis.f p flow_info in
-  debug_print "@[<v>cps_needed = @[<hov 2>";
-  Var.Set.iter (fun v -> debug_print "%s,@ " (Var.to_string v)) cps_needed;
-  debug_print "@]@,@]";
   let p, lifter_functions, liftings = Lambda_lifting_simple.f ~to_lift:cps_needed p in
   let cps_needed =
     Var.Set.map (fun f -> try Subst.from_map liftings f with Not_found -> f) cps_needed
