@@ -39,32 +39,35 @@ let fff () =
         | e -> None) }
 |}
   in
-  print_fun_decl program (Some "fff");
+  (*ignore @@ Js_of_ocaml_compiler.(Js_output.program (Pretty_print.to_out_channel stdout) program);*)
+  print_fun_decl program (Some "fff$0");
+  print_fun_decl program (Some "fff$1");
+  print_var_decl program "fff";
   [%expect
     {|
-    function fff(param, cont){
+    function fff$0(param){
      var
-      _b_ =
-        [0,
-         function(e, cont){
-          return e === E
-                  ? cont([0, function(k, cont){return cont(11);}])
-                  : cont(0);
-         }],
-      _c_ = 10;
-     function _d_(x, cont){return cont(x);}
-     var _e_ = Stdlib_Effect[3][5];
+      _p_ = [0, _d_()],
+      _q_ = _f_(),
+      _r_ = caml_call3(Stdlib_Effect[3][5], _q_, 10, _p_);
+     return caml_call1(caml_call1(Stdlib_Printf[2], _h_), _r_);
+    }
+    //end
+    function fff$1(param, cont){
+     var _i_ = [0, _d_()], _k_ = _f_(), _j_ = 10, _l_ = Stdlib_Effect[3][5];
      return caml_cps_call4
-             (_e_,
-              _d_,
-              _c_,
-              _b_,
-              function(_f_){
-               var _g_ = Stdlib_Printf[2];
+             (_l_,
+              _k_,
+              _j_,
+              _i_,
+              function(_m_){
+               var _n_ = Stdlib_Printf[2];
                return caml_cps_call2
-                       (_g_,
-                        _a_,
-                        function(_h_){return caml_cps_call2(_h_, _f_, cont);});
+                       (_n_,
+                        _h_,
+                        function(_o_){return caml_cps_call2(_o_, _m_, cont);});
               });
     }
+    //end
+    var fff = caml_cps_closure(fff$0, fff$1);
     //end |}]

@@ -1,3 +1,6 @@
+(* Ignore OCAMLRUNPARAM=b to be reproducible *)
+let () = Printexc.record_backtrace false
+
 let () =
   (* Make sure Printexc is linked *)
   let _ = Printexc.to_string Not_found in
