@@ -1,3 +1,7 @@
+# dev (20??-??) - ??
+## Features/Changes
+* Effects: add dynamic switching between CPS and direct style, resulting in much better performance for programs that do not perform effect operations extremely frequently
+
 # 5.4.0 (2023-07-06) - Lille
 
 ## Bug fixes
