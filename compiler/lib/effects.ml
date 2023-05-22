@@ -603,53 +603,53 @@ let duplicate_code ~st pc =
         state
         |> DuplicateSt.run
              (let open DuplicateSt in
-             let block = Addr.Map.find pc st.blocks in
-             (* Also duplicate nested functions *)
-             let* rev_new_body =
-               list_fold_left
-                 block.body
-                 ~f:(fun body_acc (instr, loc) ->
-                   match instr with
-                   | Let (f, Closure (params, (pc', args))) ->
-                       let* () = duplicate ~blocks pc' in
-                       let* new_pc' = find_or_add_pc pc' in
-                       return
-                         ((Let (f, Closure (params, (new_pc', args))), loc) :: body_acc)
-                   | i -> return ((i, loc) :: body_acc))
-                 ~init:[]
-             in
-             let new_body = List.rev rev_new_body in
-             (* Update branch targets *)
-             let update (pc, args) =
-               let* pc = find_or_add_pc pc in
-               return (pc, args)
-             in
-             let* branch =
-               match block.branch with
-               | ((Return _ | Raise _ | Stop) as b), loc -> return (b, loc)
-               | Branch cont, loc ->
-                   let* cont = update cont in
-                   return (Branch cont, loc)
-               | Cond (x, c1, c2), loc ->
-                   let* c1 = update c1 in
-                   let* c2 = update c2 in
-                   return (Cond (x, c1, c2), loc)
-               | Switch (x, conts_block, conts_int), loc ->
-                   let* conts_block = array_map conts_block ~f:update in
-                   let* conts_int = array_map ~f:update conts_int in
-                   return (Switch (x, conts_block, conts_int), loc)
-               | Pushtrap (c1, x, c2, poptraps), loc ->
-                   let* c1 = update c1 in
-                   let* c2 = update c2 in
-                   return (Pushtrap (c1, x, c2, poptraps), loc)
-               | Poptrap cont, loc ->
-                   let* cont = update cont in
-                   return (Poptrap cont, loc)
-             in
-             let new_block = { block with body = new_body; branch } in
-             let* new_pc = find_or_add_pc pc in
-             let* () = add_block new_pc new_block in
-             return ()))
+              let block = Addr.Map.find pc st.blocks in
+              (* Also duplicate nested functions *)
+              let* rev_new_body =
+                list_fold_left
+                  block.body
+                  ~f:(fun body_acc (instr, loc) ->
+                    match instr with
+                    | Let (f, Closure (params, (pc', args))) ->
+                        let* () = duplicate ~blocks pc' in
+                        let* new_pc' = find_or_add_pc pc' in
+                        return
+                          ((Let (f, Closure (params, (new_pc', args))), loc) :: body_acc)
+                    | i -> return ((i, loc) :: body_acc))
+                  ~init:[]
+              in
+              let new_body = List.rev rev_new_body in
+              (* Update branch targets *)
+              let update (pc, args) =
+                let* pc = find_or_add_pc pc in
+                return (pc, args)
+              in
+              let* branch =
+                match block.branch with
+                | ((Return _ | Raise _ | Stop) as b), loc -> return (b, loc)
+                | Branch cont, loc ->
+                    let* cont = update cont in
+                    return (Branch cont, loc)
+                | Cond (x, c1, c2), loc ->
+                    let* c1 = update c1 in
+                    let* c2 = update c2 in
+                    return (Cond (x, c1, c2), loc)
+                | Switch (x, conts_block, conts_int), loc ->
+                    let* conts_block = array_map conts_block ~f:update in
+                    let* conts_int = array_map ~f:update conts_int in
+                    return (Switch (x, conts_block, conts_int), loc)
+                | Pushtrap (c1, x, c2, poptraps), loc ->
+                    let* c1 = update c1 in
+                    let* c2 = update c2 in
+                    return (Pushtrap (c1, x, c2, poptraps), loc)
+                | Poptrap cont, loc ->
+                    let* cont = update cont in
+                    return (Poptrap cont, loc)
+              in
+              let new_block = { block with body = new_body; branch } in
+              let* new_pc = find_or_add_pc pc in
+              let* () = add_block new_pc new_block in
+              return ()))
       pc
       blocks
       (state, ())

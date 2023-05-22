@@ -198,14 +198,14 @@ let rec traverse
                        current_contiguous ->
                   let program, functions, lifters =
                     (if debug ()
-                    then
-                      Format.(
-                        eprintf
-                          "@[<v>Need to lift:@,%a@,@]"
-                          (pp_print_list ~pp_sep:pp_print_space pp_print_string)
-                          (List.map
-                             ~f:(fun (f, _, _, _, _) -> Code.Var.to_string f)
-                             current_contiguous)));
+                     then
+                       Format.(
+                         eprintf
+                           "@[<v>Need to lift:@,%a@,@]"
+                           (pp_print_list ~pp_sep:pp_print_space pp_print_string)
+                           (List.map
+                              ~f:(fun (f, _, _, _, _) -> Code.Var.to_string f)
+                              current_contiguous)));
                     List.fold_left
                       current_contiguous
                       ~f:(fun st (_, _, pc, _, _) ->
@@ -246,15 +246,15 @@ let rec traverse
                   in
                   let f_tuple = Var.fresh_n "recfuncs" in
                   (if debug ()
-                  then
-                    Format.(
-                      eprintf
-                        "LIFT %a in tuple %s (depth:%d free_vars:%d)@,"
-                        (pp_print_list ~pp_sep:pp_print_space pp_print_string)
-                        (List.map ~f:Code.Var.to_string f's)
-                        (Code.Var.to_string f_tuple)
-                        depth
-                        (Var.Set.cardinal free_vars)));
+                   then
+                     Format.(
+                       eprintf
+                         "LIFT %a in tuple %s (depth:%d free_vars:%d)@,"
+                         (pp_print_list ~pp_sep:pp_print_space pp_print_string)
+                         (List.map ~f:Code.Var.to_string f's)
+                         (Code.Var.to_string f_tuple)
+                         depth
+                         (Var.Set.cardinal free_vars)));
                   let pc_tuple = program.free_pc in
                   let lifted_block =
                     let tuple = Var.fresh_n "tuple" in
