@@ -34,10 +34,9 @@ Printf.printf "%d\n" (f 3)
         Stdlib_Printf = global_data.Stdlib__Printf,
         _e_ =
           [0, [4, 0, 0, 0, [12, 10, 0]], runtime.caml_string_of_jsbytes("%d\n")];
-       function f(x){
-        function g(y){function h(z){return (x + y | 0) + z | 0;} return h(7);}
-        return g(5);
-       }
+       function f(x){var g$0 = g(x); return g$0(5);}
+       function h(x, y){function h(z){return (x + y | 0) + z | 0;} return h;}
+       function g(x){function g(y){var h$0 = h(x, y); return h$0(7);} return g;}
        var _d_ = f(3);
        caml_call2(Stdlib_Printf[2], _e_, _d_);
        var Test = [0];
