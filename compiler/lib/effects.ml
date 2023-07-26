@@ -38,6 +38,8 @@ open Code
 
 let debug = Debug.find "effects"
 
+let double_translate = Config.Flag.double_translation
+
 let debug_print fmt =
   if debug () then Format.(eprintf (fmt ^^ "%!")) else Format.(ifprintf err_formatter fmt)
 
@@ -223,8 +225,9 @@ let compute_needed_transformations ~cfg ~idom ~cps_needed ~blocks ~start =
    dominator of the block. [closure_of_jump] provides the name of the
    function correspoding to each block. [closures_of_alloc_site]
    provides the list of functions which should be defined in a given
-   block. The keys are the addresses of the original (direct-style) blocks.
-   Exception handlers are dealt with separately.
+   block. In case of double translation, the keys are the addresses of the
+   original (direct-style) blocks. Exception handlers are dealt with
+   separately.
 *)
 type jump_closures =
   { closure_of_jump : Var.t Addr.Map.t
@@ -262,6 +265,8 @@ type st =
   ; idom : (int, int) Hashtbl.t
   ; jc : jump_closures
   ; closure_info : (Addr.t, Var.t list * (Addr.t * Var.t list)) Hashtbl.t
+      (* Associates a function's address with its CPS parameters and CPS
+         continuation (used when double translation is enabled) *)
   ; cps_needed : Var.Set.t
   ; blocks_to_transform : Addr.Set.t
   ; is_continuation : (Addr.t, [ `Param of Var.t | `Loop ]) Hashtbl.t
@@ -271,7 +276,11 @@ type st =
   ; flow_info : Global_flow.info
   ; cps_calls : cps_calls ref
   ; cps_pc_of_direct : (int, int) Hashtbl.t
+      (* Mapping from direct-style to CPS addresses of functions (used when
+         double translation is enabled) *)
   ; single_version_closures : single_version_closures ref
+      (* Functions that exist in only one version, even when double translation
+         is enabled *)
   }
 
 let add_block st block =
@@ -280,10 +289,13 @@ let add_block st block =
   free_pc
 
 let mk_cps_pc_of_direct cps_pc_of_direct free_pc pc =
-  try Hashtbl.find cps_pc_of_direct pc, free_pc
-  with Not_found ->
-    Hashtbl.add cps_pc_of_direct pc free_pc;
-    free_pc, free_pc + 1
+  if double_translate () then
+    try Hashtbl.find cps_pc_of_direct pc, free_pc
+    with Not_found ->
+      Hashtbl.add cps_pc_of_direct pc free_pc;
+      free_pc, free_pc + 1
+  else
+    pc, free_pc
 
 (* Provide the address of the CPS translation of a block *)
 let mk_cps_pc_of_direct ~st pc =
