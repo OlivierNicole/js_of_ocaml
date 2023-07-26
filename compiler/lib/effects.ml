@@ -38,6 +38,8 @@ open Code
 
 let debug = Debug.find "effects"
 
+let double_translate = Config.Flag.double_translation
+
 let debug_print fmt =
   if debug () then Format.(eprintf (fmt ^^ "%!")) else Format.(ifprintf err_formatter fmt)
 
@@ -223,8 +225,9 @@ let compute_needed_transformations ~cfg ~idom ~cps_needed ~blocks ~start =
    dominator of the block. [closure_of_jump] provides the name of the
    function correspoding to each block. [closures_of_alloc_site]
    provides the list of functions which should be defined in a given
-   block. The keys are the addresses of the original (direct-style) blocks.
-   Exception handlers are dealt with separately.
+   block. In case of double translation, the keys are the addresses of the
+   original (direct-style) blocks. Exception handlers are dealt with
+   separately.
 *)
 type jump_closures =
   { closure_of_jump : Var.t Addr.Map.t
@@ -262,6 +265,7 @@ type st =
   ; idom : (int, int) Hashtbl.t
   ; jc : jump_closures
   ; closure_info : (Addr.t, Var.t list * (Addr.t * Var.t list)) Hashtbl.t
+        (* Associates a function's address with its CPS parameters and CPS continuation *)
   ; cps_needed : Var.Set.t
   ; blocks_to_transform : Addr.Set.t
   ; is_continuation : (Addr.t, [ `Param of Var.t | `Loop ]) Hashtbl.t
@@ -271,7 +275,11 @@ type st =
   ; flow_info : Global_flow.info
   ; cps_calls : cps_calls ref
   ; cps_pc_of_direct : (int, int) Hashtbl.t
+        (* Mapping from direct-style to CPS addresses of functions (used when
+           double translation is enabled) *)
   ; single_version_closures : single_version_closures ref
+        (* Functions that exist in only one version, even when double translation
+           is enabled *)
   }
 
 let add_block st block =
@@ -280,10 +288,13 @@ let add_block st block =
   free_pc
 
 let mk_cps_pc_of_direct cps_pc_of_direct free_pc pc =
-  try Hashtbl.find cps_pc_of_direct pc, free_pc
-  with Not_found ->
-    Hashtbl.add cps_pc_of_direct pc free_pc;
-    free_pc, free_pc + 1
+  if double_translate ()
+  then (
+    try Hashtbl.find cps_pc_of_direct pc, free_pc
+    with Not_found ->
+      Hashtbl.add cps_pc_of_direct pc free_pc;
+      free_pc, free_pc + 1)
+  else pc, free_pc
 
 (* Provide the address of the CPS translation of a block *)
 let mk_cps_pc_of_direct ~st pc =
@@ -827,53 +838,83 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
   ; branch = last
   }
 
-(* Modify all function applications and closure creations to take into account the fact
-   that some closures must now have a CPS version. Also rewrite the effect primitives to
-   switch to the CPS version of functions (for resume) or fail (for perform). *)
-let rewrite_direct_block ~cps_needed ~closure_info ~ident_fn ~pc ~lifter_functions block =
+let rewrite_direct_instr ~st (instr, loc) =
+  match instr with
+  | Let (x, Closure (_, (pc, _))) when Var.Set.mem x st.cps_needed ->
+      (* Add the continuation parameter, and change the initial block if
+         needed *)
+      let cps_params, cps_cont = Hashtbl.find st.closure_info pc in
+      Let (x, Closure (cps_params, cps_cont)), loc
+  | Let (x, Prim (Extern "caml_alloc_dummy_function", [ size; arity ])) -> (
+      match arity with
+      | Pc (Int a) ->
+          ( Let
+              ( x
+              , Prim (Extern "caml_alloc_dummy_function", [ size; Pc (Int (Int32.succ a)) ])
+              )
+          , loc )
+      | _ -> assert false)
+  | Let (x, Apply { f; args; _ }) when not (Var.Set.mem x st.cps_needed) ->
+      (* At the moment, we turn into CPS any function not called with
+         the right number of parameter *)
+      assert (Global_flow.exact_call st.flow_info f (List.length args));
+      Let (x, Apply { f; args; exact = true }), loc
+  | Let (_, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) ->
+      assert false
+  | _ -> instr, loc
+
+(* If double-translating, modify all function applications and closure
+   creations to take into account the fact that some closures must now have a
+   CPS version. Also rewrite the effect primitives to switch to the CPS version
+   of functions (for resume) or fail (for perform).
+   If not double-translating, then  *)
+let rewrite_direct_block ~st ~cps_needed ~closure_info ~ident_fn ~pc ~lifter_functions block =
   debug_print "@[<v>rewrite_direct_block %d@,@]" pc;
-  let rewrite_instr = function
-    | Let (x, Closure (params, ((pc, _) as cont)))
-      when Var.Set.mem x cps_needed && not (Var.Set.mem x lifter_functions) ->
-        let direct_c = Var.fork x in
-        let cps_c = Var.fork x in
-        let cps_params, cps_cont = Hashtbl.find closure_info pc in
-        [ Let (direct_c, Closure (params, cont))
-        ; Let (cps_c, Closure (cps_params, cps_cont))
-        ; Let (x, Prim (Extern "caml_cps_closure", [ Pv direct_c; Pv cps_c ]))
-        ]
-    | Let (x, Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ])) ->
-        (* Pass the identity as a continuation and pass to
-           [caml_trampoline_cps], which will 1. install a trampoline, 2. call
-           the CPS version of [f] and 3. handle exceptions. *)
-        let k = Var.fresh_n "cont" in
-        let args = Var.fresh_n "args" in
-        [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv ident_fn ]))
-        ; Let (args, Prim (Extern "%js_array", [ Pv arg; Pv k ]))
-        ; Let (x, Prim (Extern "caml_trampoline_cps", [ Pv f; Pv args ]))
-        ]
-    | Let (x, Prim (Extern "%perform", [ Pv effect ])) ->
-        (* Perform the effect, which should call the "Unhandled effect" handler. *)
-        let k = Int 0l in
-        (* Dummy continuation *)
-        [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pc (Int 0l); Pc k ])) ]
-    | Let (x, Prim (Extern "%reperform", [ Pv effect; Pv continuation ])) ->
-        (* Similar to previous case *)
-        let k = Int 0l in
-        [ Let
-            (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ]))
-        ]
-    | (Let _ | Assign _ | Set_field _ | Offset_ref _ | Array_set _) as instr -> [ instr ]
-  in
-  let body =
-    (* For each instruction... *)
-    List.concat_map block.body ~f:(fun (i, loc) ->
-        (* ... apply [rewrite_instr] ... *)
-        rewrite_instr i
-        (* ... and decorate all resulting instructions with [loc] *)
-        |> List.map ~f:(fun i -> i, loc))
-  in
-  { block with body }
+  if double_translate () then
+    let rewrite_instr = function
+      | Let (x, Closure (params, ((pc, _) as cont)))
+        when Var.Set.mem x cps_needed && not (Var.Set.mem x lifter_functions) ->
+          let direct_c = Var.fork x in
+          let cps_c = Var.fork x in
+          let cps_params, cps_cont = Hashtbl.find closure_info pc in
+          [ Let (direct_c, Closure (params, cont))
+          ; Let (cps_c, Closure (cps_params, cps_cont))
+          ; Let (x, Prim (Extern "caml_cps_closure", [ Pv direct_c; Pv cps_c ]))
+          ]
+      | Let (x, Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ])) ->
+          (* Pass the identity as a continuation and pass to
+             [caml_trampoline_cps], which will 1. install a trampoline, 2. call
+             the CPS version of [f] and 3. handle exceptions. *)
+          let k = Var.fresh_n "cont" in
+          let args = Var.fresh_n "args" in
+          [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv ident_fn ]))
+          ; Let (args, Prim (Extern "%js_array", [ Pv arg; Pv k ]))
+          ; Let (x, Prim (Extern "caml_trampoline_cps", [ Pv f; Pv args ]))
+          ]
+      | Let (x, Prim (Extern "%perform", [ Pv effect ])) ->
+          (* Perform the effect, which should call the "Unhandled effect" handler. *)
+          let k = Int 0l in
+          (* Dummy continuation *)
+          [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pc (Int 0l); Pc k ])) ]
+      | Let (x, Prim (Extern "%reperform", [ Pv effect; Pv continuation ])) ->
+          (* Similar to previous case *)
+          let k = Int 0l in
+          [ Let
+              (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ]))
+          ]
+      | (Let _ | Assign _ | Set_field _ | Offset_ref _ | Array_set _) as instr -> [ instr ]
+    in
+    let body =
+      (* For each instruction... *)
+      List.concat_map block.body ~f:(fun (i, loc) ->
+          (* ... apply [rewrite_instr] ... *)
+          rewrite_instr i
+          (* ... and decorate all resulting instructions with [loc] *)
+          |> List.map ~f:(fun i -> i, loc))
+    in
+    { block with body }
+  else
+    { block with body = List.map ~f:(rewrite_direct_instr ~st) block.body }
 
 (* Apply a substitution in a set of blocks *)
 let subst_in_blocks blocks s =
@@ -944,8 +985,10 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
           match name_opt with
           | Some name -> Var.Set.mem name cps_needed
           | None ->
-              (* The toplevel code does not need to be in CPS. *)
-              false
+              (* We need to handle the CPS calls that are at toplevel, except
+                 if we double-translate (in which case they are like all other
+                 CPS calls from direct code). *)
+              not (double_translate ())
         in
         let blocks_to_transform, matching_exn_handler, is_continuation =
           if should_compute_needed_transformations
@@ -991,8 +1034,11 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
               should_compute_needed_transformations
               && not (Var.Set.mem name lifter_functions)
           | None ->
-              (* The toplevel code does not need to be in CPS. *)
-              false
+              (* Toplevel code: if we double-translate, no need to handle it
+                 specially: CPS calls in it are like all other CPS calls from
+                 direct code. Otherwise, it needs to wrapped within a
+                 [caml_callback], but only if it performs CPS calls. *)
+              (not (double_translate ())) && not (Addr.Set.is_empty blocks_to_transform)
         in
         if debug ()
         then (
@@ -1011,12 +1057,14 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
             ());
         let blocks, free_pc, bound_subst, param_subst, new_blocks =
           (* For every block in the closure,
-             1. add its CPS translation to the block map at a fresh address, if needed
-             2. keep the direct-style block but modify function definitions to add the CPS
-             version where needed, and turn uses of %resume and %perform into switchings
-             to CPS. *)
+             1. CPS-translate it if needed. If we double-translate, add its CPS
+                translation to the block map at a fresh address. Otherwise,
+                just replace the original block.
+             2. If we double-translate, keep the direct-style block but modify function
+                definitions to add the CPS version where needed, and turn uses of %resume
+                and %perform into switchings to CPS. *)
           let param_subst, transform_block =
-            if function_needs_cps
+            if function_needs_cps && double_translate ()
             then (
               let k = Var.fresh_n "cont" in
               let cps_start = mk_cps_pc_of_direct ~st start in
@@ -1037,6 +1085,7 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
               , fun pc block ->
                   let cps_block = cps_block ~st ~lifter_functions ~k ~orig_pc:pc block in
                   ( rewrite_direct_block
+                      ~st
                       ~cps_needed
                       ~closure_info:st.closure_info
                       ~ident_fn
@@ -1044,10 +1093,19 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
                       ~lifter_functions
                       block
                   , Some cps_block ) ))
+            else if function_needs_cps && not (double_translate ())
+            then (
+              let k = Var.fresh_n "cont" in
+              Hashtbl.add st.closure_info initial_start (params @ [ k ], (start', args));
+              ( param_subst
+              , ( fun pc block -> cps_block ~st ~lifter_functions ~k ~orig_pc:pc block
+                , None ))
+            )
             else
               ( param_subst
               , fun pc block ->
                   ( rewrite_direct_block
+                      ~st
                       ~cps_needed
                       ~closure_info:st.closure_info
                       ~ident_fn
@@ -1150,6 +1208,87 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
     { start = new_start; blocks; free_pc = new_start + 1 }
   in
   p, !cps_calls, !single_version_closures
+
+(****)
+
+let current_loop_header frontiers in_loop pc =
+  (* We remain in a loop while the loop header is in the dominance frontier.
+     We enter a loop when the block is in its dominance frontier. *)
+  let frontier = get_edges frontiers pc in
+  match in_loop with
+  | Some header when Addr.Set.mem header frontier -> in_loop
+  | _ -> if Addr.Set.mem pc frontier then Some pc else None
+
+let wrap_call ~cps_needed p x f args accu loc =
+  let arg_array = Var.fresh () in
+  ( p
+  , Var.Set.remove x cps_needed
+  , [ Let (arg_array, Prim (Extern "%js_array", List.map ~f:(fun y -> Pv y) args)), noloc
+    ; Let (x, Prim (Extern "caml_callback", [ Pv f; Pv arg_array ])), loc
+    ]
+    :: accu )
+
+let wrap_primitive ~cps_needed p x e accu loc =
+  let f = Var.fresh () in
+  let closure_pc = p.free_pc in
+  ( { p with
+      free_pc = p.free_pc + 1
+    ; blocks =
+        Addr.Map.add
+          closure_pc
+          (let y = Var.fresh () in
+           { params = []; body = [ Let (y, e), loc ]; branch = Return y, loc })
+          p.blocks
+    }
+  , Var.Set.remove x (Var.Set.add f cps_needed)
+  , let args = Var.fresh () in
+    [ Let (f, Closure ([], (closure_pc, []))), noloc
+    ; Let (args, Prim (Extern "%js_array", [])), noloc
+    ; Let (x, Prim (Extern "caml_callback", [ Pv f; Pv args ])), loc
+    ]
+    :: accu )
+
+let rewrite_toplevel_instr (p, cps_needed, accu) instr =
+  match instr with
+  | Let (x, Apply { f; args; _ }), loc when Var.Set.mem x cps_needed ->
+      wrap_call ~cps_needed p x f args accu loc
+  | Let (x, (Prim (Extern ("%resume" | "%perform" | "%reperform"), _) as e)), loc ->
+      wrap_primitive ~cps_needed p x e accu loc
+  | _ -> p, cps_needed, [ instr ] :: accu
+
+(* Wrap function calls inside [caml_callback] at toplevel to avoid
+   unncessary function nestings. This is not done inside loops since
+   using repeatedly [caml_callback] can be costly. *)
+let rewrite_toplevel ~cps_needed p =
+  let { start; blocks; _ } = p in
+  let cfg = build_graph blocks start in
+  let idom = dominator_tree cfg in
+  let frontiers = dominance_frontier cfg idom in
+  let rec traverse visited (p : Code.program) cps_needed in_loop pc =
+    if Addr.Set.mem pc visited
+    then visited, p, cps_needed
+    else
+      let visited = Addr.Set.add pc visited in
+      let in_loop = current_loop_header frontiers in_loop pc in
+      let p, cps_needed =
+        if Option.is_none in_loop
+        then
+          let block = Addr.Map.find pc p.blocks in
+          let p, cps_needed, body_rev =
+            List.fold_left ~f:rewrite_toplevel_instr ~init:(p, cps_needed, []) block.body
+          in
+          let body = List.concat @@ List.rev body_rev in
+          { p with blocks = Addr.Map.add pc { block with body } p.blocks }, cps_needed
+        else p, cps_needed
+      in
+      Code.fold_children
+        blocks
+        pc
+        (fun pc (visited, p, cps_needed) -> traverse visited p cps_needed in_loop pc)
+        (visited, p, cps_needed)
+  in
+  let _, p, cps_needed = traverse Addr.Set.empty p cps_needed None start in
+  p, cps_needed
 
 (****)
 
@@ -1266,21 +1405,29 @@ let f (p, live_vars) =
   let p = remove_empty_blocks ~live_vars p in
   let flow_info = Global_flow.f ~fast:false p in
   let cps_needed = Partial_cps_analysis.f p flow_info in
-  let p, lifter_functions, liftings = Lambda_lifting_simple.f ~to_lift:cps_needed p in
-  let cps_needed =
-    Var.Set.map (fun f -> try Subst.from_map liftings f with Not_found -> f) cps_needed
+  let p, lifter_functions, cps_needed =
+    if double_translate () then (
+      let p, lifter_functions, liftings = Lambda_lifting_simple.f ~to_lift:cps_needed p in
+      let cps_needed =
+        Var.Set.map (fun f -> try Subst.from_map liftings f with Not_found -> f) cps_needed
+      in
+      if debug ()
+      then (
+        debug_print "@[<v>Lifting closures:@,";
+        lifter_functions |> Var.Set.iter (fun v -> debug_print "%s,@ " (Var.to_string v));
+        debug_print "@]";
+        debug_print "@[<v>cps_needed (after lifting) = @[<hov 2>";
+        Var.Set.iter (fun v -> debug_print "%s,@ " (Var.to_string v)) cps_needed;
+        debug_print "@]@,@]";
+        debug_print "@[<v>After lambda lifting...@,";
+        Code.Print.program (fun _ _ -> "") p;
+        debug_print "@]");
+        p, lifter_functions, cps_needed)
+    else (
+      let p, cps_needed = rewrite_toplevel ~cps_needed p in
+      p, cps_needed, Var.Set.empty
+    )
   in
-  if debug ()
-  then (
-    debug_print "@[<v>Lifting closures:@,";
-    lifter_functions |> Var.Set.iter (fun v -> debug_print "%s,@ " (Var.to_string v));
-    debug_print "@]";
-    debug_print "@[<v>cps_needed (after lifting) = @[<hov 2>";
-    Var.Set.iter (fun v -> debug_print "%s,@ " (Var.to_string v)) cps_needed;
-    debug_print "@]@,@]";
-    debug_print "@[<v>After lambda lifting...@,";
-    Code.Print.program (fun _ _ -> "") p;
-    debug_print "@]");
   let p = split_blocks ~cps_needed ~lifter_functions p in
   let p, cps_calls, single_version_closures =
     cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p
