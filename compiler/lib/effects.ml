@@ -265,8 +265,7 @@ type st =
   ; idom : (int, int) Hashtbl.t
   ; jc : jump_closures
   ; closure_info : (Addr.t, Var.t list * (Addr.t * Var.t list)) Hashtbl.t
-        (* Associates a function's address with its CPS parameters and CPS
-           continuation (used when double translation is enabled) *)
+        (* Associates a function's address with its CPS parameters and CPS continuation *)
   ; cps_needed : Var.Set.t
   ; blocks_to_transform : Addr.Set.t
   ; is_continuation : (Addr.t, [ `Param of Var.t | `Loop ]) Hashtbl.t
@@ -847,48 +846,51 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
    switch to the CPS version of functions (for resume) or fail (for perform). *)
 let rewrite_direct_block ~cps_needed ~closure_info ~ident_fn ~pc ~lifter_functions block =
   debug_print "@[<v>rewrite_direct_block %d@,@]" pc;
-  let rewrite_instr = function
-    | Let (x, Closure (params, ((pc, _) as cont)))
-      when Var.Set.mem x cps_needed && not (Var.Set.mem x lifter_functions) ->
-        let direct_c = Var.fork x in
-        let cps_c = Var.fork x in
-        let cps_params, cps_cont = Hashtbl.find closure_info pc in
-        [ Let (direct_c, Closure (params, cont))
-        ; Let (cps_c, Closure (cps_params, cps_cont))
-        ; Let (x, Prim (Extern "caml_cps_closure", [ Pv direct_c; Pv cps_c ]))
-        ]
-    | Let (x, Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ])) ->
-        (* Pass the identity as a continuation and pass to
-           [caml_trampoline_cps], which will 1. install a trampoline, 2. call
-           the CPS version of [f] and 3. handle exceptions. *)
-        let k = Var.fresh_n "cont" in
-        let args = Var.fresh_n "args" in
-        [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv ident_fn ]))
-        ; Let (args, Prim (Extern "%js_array", [ Pv arg; Pv k ]))
-        ; Let (x, Prim (Extern "caml_trampoline_cps", [ Pv f; Pv args ]))
-        ]
-    | Let (x, Prim (Extern "%perform", [ Pv effect ])) ->
-        (* Perform the effect, which should call the "Unhandled effect" handler. *)
-        let k = Int 0l in
-        (* Dummy continuation *)
-        [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pc (Int 0l); Pc k ])) ]
-    | Let (x, Prim (Extern "%reperform", [ Pv effect; Pv continuation ])) ->
-        (* Similar to previous case *)
-        let k = Int 0l in
-        [ Let
-            (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ]))
-        ]
-    | (Let _ | Assign _ | Set_field _ | Offset_ref _ | Array_set _) as instr -> [ instr ]
-  in
-  let body =
-    (* For each instruction... *)
-    List.concat_map block.body ~f:(fun (i, loc) ->
-        (* ... apply [rewrite_instr] ... *)
-        rewrite_instr i
-        (* ... and decorate all resulting instructions with [loc] *)
-        |> List.map ~f:(fun i -> i, loc))
-  in
-  { block with body }
+  if double_translate () then
+    let rewrite_instr = function
+      | Let (x, Closure (params, ((pc, _) as cont)))
+        when Var.Set.mem x cps_needed && not (Var.Set.mem x lifter_functions) ->
+          let direct_c = Var.fork x in
+          let cps_c = Var.fork x in
+          let cps_params, cps_cont = Hashtbl.find closure_info pc in
+          [ Let (direct_c, Closure (params, cont))
+          ; Let (cps_c, Closure (cps_params, cps_cont))
+          ; Let (x, Prim (Extern "caml_cps_closure", [ Pv direct_c; Pv cps_c ]))
+          ]
+      | Let (x, Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ])) ->
+          (* Pass the identity as a continuation and pass to
+             [caml_trampoline_cps], which will 1. install a trampoline, 2. call
+             the CPS version of [f] and 3. handle exceptions. *)
+          let k = Var.fresh_n "cont" in
+          let args = Var.fresh_n "args" in
+          [ Let (k, Prim (Extern "caml_resume_stack", [ Pv stack; Pv ident_fn ]))
+          ; Let (args, Prim (Extern "%js_array", [ Pv arg; Pv k ]))
+          ; Let (x, Prim (Extern "caml_trampoline_cps", [ Pv f; Pv args ]))
+          ]
+      | Let (x, Prim (Extern "%perform", [ Pv effect ])) ->
+          (* Perform the effect, which should call the "Unhandled effect" handler. *)
+          let k = Int 0l in
+          (* Dummy continuation *)
+          [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pc (Int 0l); Pc k ])) ]
+      | Let (x, Prim (Extern "%reperform", [ Pv effect; Pv continuation ])) ->
+          (* Similar to previous case *)
+          let k = Int 0l in
+          [ Let
+              (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ]))
+          ]
+      | (Let _ | Assign _ | Set_field _ | Offset_ref _ | Array_set _) as instr -> [ instr ]
+    in
+    let body =
+      (* For each instruction... *)
+      List.concat_map block.body ~f:(fun (i, loc) ->
+          (* ... apply [rewrite_instr] ... *)
+          rewrite_instr i
+          (* ... and decorate all resulting instructions with [loc] *)
+          |> List.map ~f:(fun i -> i, loc))
+    in
+    { block with body }
+  else
+    assert false (* TODO do what cps_instr used to do before my changes (but let's not confusingly call this function cps_instr) *)
 
 (* Apply a substitution in a set of blocks *)
 let subst_in_blocks blocks s =
@@ -959,8 +961,10 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
           match name_opt with
           | Some name -> Var.Set.mem name cps_needed
           | None ->
-              (* The toplevel code does not need to be in CPS. *)
-              false
+              (* We need to handle the CPS calls that are at toplevel, except
+                 if we double-translate (in which case they are like all other
+                 CPS calls from direct code). *)
+              not (double_translate ())
         in
         let blocks_to_transform, matching_exn_handler, is_continuation =
           if should_compute_needed_transformations
@@ -1006,8 +1010,11 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
               should_compute_needed_transformations
               && not (Var.Set.mem name lifter_functions)
           | None ->
-              (* The toplevel code does not need to be in CPS. *)
-              false
+              (* Toplevel code: if we double-translate, no need to handle it
+                 specially: CPS calls in it are like all other CPS calls from
+                 direct code. Otherwise, it needs to wrapped within a
+                 [caml_callback], but only if it performs CPS calls. *)
+              (not (double_translate ())) && not (Addr.Set.is_empty blocks_to_transform)
         in
         if debug ()
         then (
@@ -1026,12 +1033,14 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
             ());
         let blocks, free_pc, bound_subst, param_subst, new_blocks =
           (* For every block in the closure,
-             1. add its CPS translation to the block map at a fresh address, if needed
-             2. keep the direct-style block but modify function definitions to add the CPS
-             version where needed, and turn uses of %resume and %perform into switchings
-             to CPS. *)
+             1. CPS-translate it if needed. If we double-translate, add its CPS
+                translation to the block map at a fresh address. Otherwise,
+                just replace the original block.
+             2. If we double-translate, keep the direct-style block but modify function
+                definitions to add the CPS version where needed, and turn uses of %resume
+                and %perform into switchings to CPS. *)
           let param_subst, transform_block =
-            if function_needs_cps
+            if function_needs_cps && double_translate ()
             then (
               let k = Var.fresh_n "cont" in
               let cps_start = mk_cps_pc_of_direct ~st start in
@@ -1059,6 +1068,14 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
                       ~lifter_functions
                       block
                   , Some cps_block ) ))
+            else if function_needs_cps && not (double_translate ())
+            then (
+              let k = Var.fresh_n "cont" in
+              Hashtbl.add st.closure_info initial_start (params @ [ k ], (start', args));
+              ( param_subst
+              , ( fun pc block -> cps_block ~st ~lifter_functions ~k ~orig_pc:pc block
+                , None ))
+            )
             else
               ( param_subst
               , fun pc block ->
