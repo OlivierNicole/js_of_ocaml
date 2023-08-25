@@ -52,113 +52,64 @@ let%expect_test "test-compiler/lib-effects/test1.ml" =
            s ^ "aaa"
        |}
   in
-  print_fun_decl code (Some "exceptions$0");
-  print_fun_decl code (Some "exceptions$1");
-  print_var_decl code "exceptions";
+  print_fun_decl code (Some "exceptions");
   [%expect
     {|
 
-    function exceptions$0(s){
-     try{var _G_ = caml_int_of_string(s), n = _G_;}
-     catch(_J_){
-      var _z_ = caml_wrap_exception(_J_);
-      if(_z_[1] !== Stdlib[7]) throw caml_maybe_attach_backtrace(_z_, 0);
-      var n = 0, _A_ = 0;
-     }
-     try{
-      if(caml_string_equal(s, cst$0))
-       throw caml_maybe_attach_backtrace(Stdlib[8], 1);
-      var _F_ = 7, m = _F_;
-     }
-     catch(_I_){
-      var _B_ = caml_wrap_exception(_I_);
-      if(_B_ !== Stdlib[8]) throw caml_maybe_attach_backtrace(_B_, 0);
-      var m = 0, _C_ = 0;
-     }
-     try{
-      if(caml_string_equal(s, cst))
-       throw caml_maybe_attach_backtrace(Stdlib[8], 1);
-      var _E_ = [0, [0, caml_call1(Stdlib[79], cst_toto), n, m]];
-      return _E_;
-     }
-     catch(_H_){
-      var _D_ = caml_wrap_exception(_H_);
-      if(_D_ === Stdlib[8]) return 0;
-      throw caml_maybe_attach_backtrace(_D_, 0);
-     }
-    }
-    //end
-    function exceptions$1(s, cont){
-     try{var _u_ = caml_int_of_string(s), n = _u_;}
-     catch(_y_){
-      var _p_ = caml_wrap_exception(_y_);
-      if(_p_[1] !== Stdlib[7]){
+    function exceptions(s, cont){
+     try{var _p_ = runtime.caml_int_of_string(s), n = _p_;}
+     catch(_t_){
+      var _i_ = caml_wrap_exception(_t_);
+      if(_i_[1] !== Stdlib[7]){
        var raise$1 = caml_pop_trap();
-       return raise$1(caml_maybe_attach_backtrace(_p_, 0));
+       return raise$1(caml_maybe_attach_backtrace(_i_, 0));
       }
-      var n = 0;
+      var n = 0, _j_ = 0;
      }
      try{
       if(caml_string_equal(s, cst$0))
        throw caml_maybe_attach_backtrace(Stdlib[8], 1);
-      var _t_ = 7, m = _t_;
+      var _o_ = 7, m = _o_;
      }
-     catch(_x_){
-      var _q_ = caml_wrap_exception(_x_);
-      if(_q_ !== Stdlib[8]){
+     catch(_s_){
+      var _k_ = caml_wrap_exception(_s_);
+      if(_k_ !== Stdlib[8]){
        var raise$0 = caml_pop_trap();
-       return raise$0(caml_maybe_attach_backtrace(_q_, 0));
+       return raise$0(caml_maybe_attach_backtrace(_k_, 0));
       }
-      var m = 0;
+      var m = 0, _l_ = 0;
      }
      caml_push_trap
-      (function(_w_){
-        if(_w_ === Stdlib[8]) return cont(0);
+      (function(_r_){
+        if(_r_ === Stdlib[8]) return cont(0);
         var raise = caml_pop_trap();
-        return raise(caml_maybe_attach_backtrace(_w_, 0));
+        return raise(caml_maybe_attach_backtrace(_r_, 0));
        });
      if(caml_string_equal(s, cst)){
-      var _r_ = Stdlib[8], raise = caml_pop_trap();
-      return raise(caml_maybe_attach_backtrace(_r_, 1));
+      var _m_ = Stdlib[8], raise = caml_pop_trap();
+      return raise(caml_maybe_attach_backtrace(_m_, 1));
      }
-     var _s_ = Stdlib[79];
+     var _n_ = Stdlib[79];
      return caml_cps_call2
-             (_s_,
+             (_n_,
               cst_toto,
-              function(_v_){caml_pop_trap(); return cont([0, [0, _v_, n, m]]);});
+              function(_q_){caml_pop_trap(); return cont([0, [0, _q_, n, m]]);});
     }
-    //end
-    var exceptions = caml_cps_closure(exceptions$0, exceptions$1);
     //end |}];
-  print_fun_decl code (Some "handler_is_loop$0");
-  print_fun_decl code (Some "handler_is_loop$1");
-  print_var_decl code "handler_is_loop";
+  print_fun_decl code (Some "handler_is_loop");
   [%expect
     {|
-    function handler_is_loop$0(f, g, l){
-     try{var _n_ = caml_call1(f, 0); return _n_;}
-     catch(_o_){
-      var l$0 = l;
-      for(;;){
-       var match = caml_call1(g, l$0);
-       if(72330306 <= match[1]){var l$1 = match[2], l$0 = l$1; continue;}
-       var exn = match[2];
-       throw caml_maybe_attach_backtrace(exn, 1);
-      }
-     }
-    }
-    //end
-    function handler_is_loop$1(f, g, l, cont){
+    function handler_is_loop(f, g, l, cont){
      caml_push_trap
-      (function(_l_){
-        function _m_(l){
+      (function(_g_){
+        function _h_(l){
          return caml_cps_call2
                  (g,
                   l,
                   function(match){
                    if(72330306 <= match[1]){
                     var l = match[2];
-                    return caml_cps_exact_mono_call1(_m_, l);
+                    return caml_cps_exact_call1(_h_, l);
                    }
                    var
                     exn = match[2],
@@ -167,32 +118,21 @@ let%expect_test "test-compiler/lib-effects/test1.ml" =
                    return raise(exn$0);
                   });
         }
-        return _m_(l);
+        return _h_(l);
        });
-     var _j_ = 0;
+     var _e_ = 0;
      return caml_cps_call2
-             (f, _j_, function(_k_){caml_pop_trap(); return cont(_k_);});
+             (f, _e_, function(_f_){caml_pop_trap(); return cont(_f_);});
     }
-    //end
-    var handler_is_loop = caml_cps_closure(handler_is_loop$0, handler_is_loop$1);
     //end |}];
-  print_fun_decl code (Some "handler_is_merge_node$0");
-  print_fun_decl code (Some "handler_is_merge_node$1");
-  print_var_decl code "handler_is_merge_node";
+  print_fun_decl code (Some "handler_is_merge_node");
   [%expect
     {|
-    function handler_is_merge_node$0(g){
-     try{var _h_ = caml_call1(g, 0), s = _h_;}catch(_i_){var s = cst$1;}
-     return caml_call2(Stdlib[28], s, cst_aaa);
-    }
-    //end
-    function handler_is_merge_node$1(g, cont){
-     function _e_(s){return caml_cps_call3(Stdlib[28], s, cst_aaa, cont);}
-     caml_push_trap(function(_g_){return _e_(cst$1);});
-     var _d_ = 0;
+    function handler_is_merge_node(g, cont){
+     function _b_(s){return caml_cps_call3(Stdlib[28], s, cst_aaa, cont);}
+     caml_push_trap(function(_d_){return _b_(cst$1);});
+     var _a_ = 0;
      return caml_cps_call2
-             (g, _d_, function(_f_){caml_pop_trap(); return _e_(_f_);});
+             (g, _a_, function(_c_){caml_pop_trap(); return _b_(_c_);});
     }
-    //end
-    var handler_is_merge_node = caml_cps_closure(handler_is_merge_node$0, handler_is_merge_node$1);
     //end |}]

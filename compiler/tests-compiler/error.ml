@@ -25,16 +25,13 @@ let normalize x =
   |> Str.global_replace (Str.regexp "node\\(.exe\\)?") "%{NODE}"
 
 let%expect_test "uncaugh error" =
-  let prog = {|
-(* Ignore OCAMLRUNPARAM=b to be reproducible *)
-Printexc.record_backtrace false;;
-let _ = raise Not_found |}
-  in
+  let prog = {| let _ = raise Not_found |} in
   compile_and_run prog;
   print_endline (normalize [%expect.output]);
   [%expect
     {|
     Fatal error: exception Not_found
+
 
     process exited with error code 2
      %{NODE} test.js |}];
@@ -49,9 +46,6 @@ let _ = raise Not_found |}
   (* Test caml_format_exception by un-registeting  "Printexc.handle_uncaught_exception". Note that this hack unly work with jsoo *)
   let prog =
     {|
-(* Ignore OCAMLRUNPARAM=b to be reproducible *)
-Printexc.record_backtrace false;;
-
 let null = Array.unsafe_get [|1|] 1
 let () = Callback.register "Printexc.handle_uncaught_exception" null
 exception C
@@ -68,9 +62,6 @@ let _ = raise C |}
      %{NODE} test.js |}];
   let prog =
     {|
-(* Ignore OCAMLRUNPARAM=b to be reproducible *)
-Printexc.record_backtrace false;;
-
 let null = Array.unsafe_get [|1|] 1
 let () = Callback.register "Printexc.handle_uncaught_exception" null
 exception D of int * string * Int64.t
@@ -88,9 +79,6 @@ let _ = raise (D(2,"test",43L))
      %{NODE} test.js |}];
   let prog =
     {|
-(* Ignore OCAMLRUNPARAM=b to be reproducible *)
-Printexc.record_backtrace false;;
-
 let null = Array.unsafe_get [|1|] 1
 let () = Callback.register "Printexc.handle_uncaught_exception" null
 let _ = assert false |}
@@ -99,16 +87,13 @@ let _ = assert false |}
   print_endline (normalize [%expect.output]);
   [%expect
     {|
-    Fatal error: exception Assert_failure("test.ml", 7, 8)
+    Fatal error: exception Assert_failure("test.ml", 4, 8)
 
 
     process exited with error code 2
      %{NODE} test.js |}];
   let prog =
     {|
-(* Ignore OCAMLRUNPARAM=b to be reproducible *)
-Printexc.record_backtrace false;;
-
 let null = Array.unsafe_get [|1|] 1
 let () = Callback.register "Printexc.handle_uncaught_exception" null
  [@@@ocaml.warning "-8"] let _ = match 3 with 2 -> () |}
@@ -117,7 +102,7 @@ let () = Callback.register "Printexc.handle_uncaught_exception" null
   print_endline (normalize [%expect.output]);
   [%expect
     {|
-    Fatal error: exception Match_failure("test.ml", 7, 33)
+    Fatal error: exception Match_failure("test.ml", 4, 33)
 
 
     process exited with error code 2
@@ -126,9 +111,6 @@ let () = Callback.register "Printexc.handle_uncaught_exception" null
   (* Uncaught javascript exception *)
   let prog =
     {|
-(* Ignore OCAMLRUNPARAM=b to be reproducible *)
-Printexc.record_backtrace false;;
-
 let null : _ -> _ -> _ = Array.unsafe_get [||] 0
 let () = Callback.register "Printexc.handle_uncaught_exception" null
 exception D of int * string * Int64.t

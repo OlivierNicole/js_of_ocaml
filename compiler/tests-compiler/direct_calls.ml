@@ -123,91 +123,53 @@ let%expect_test "direct calls with --enable effects" =
            M1.f 1; M2.f 2
 |}
   in
-  print_fun_decl code (Some "test1$0");
-  print_fun_decl code (Some "test1$1");
-  print_var_decl code "test1";
-  print_fun_decl code (Some "test2$0");
-  print_fun_decl code (Some "test2$1");
-  print_var_decl code "test2";
-  print_fun_decl code (Some "test3$0");
-  print_fun_decl code (Some "test3$1");
-  print_var_decl code "test3";
-  print_fun_decl code (Some "test4$0");
-  print_fun_decl code (Some "test4$1");
-  print_var_decl code "test4";
+  print_fun_decl code (Some "test1");
+  print_fun_decl code (Some "test2");
+  print_fun_decl code (Some "test3");
+  print_fun_decl code (Some "test4");
   [%expect
     {|
-    function test1$0(param){
-     function f(g, x){return caml_call1(g, x);}
-     var _H_ = 7;
-     f(function(x){return x + 1 | 0;}, _H_);
-     var _I_ = 4.;
-     f(function(x){return x * 2.;}, _I_);
-     return 0;
-    }
-    //end
-    function test1$1(param, cont){
-     function f(g, x){return caml_call1(g, x);}
-     var _F_ = 7;
-     f(function(x){return x + 1 | 0;}, _F_);
-     var _G_ = 4.;
-     f(function(x){return x * 2.;}, _G_);
+    function test1(param, cont){
+     function f(g, x){return g(x);}
+     var _k_ = 7;
+     f(function(x){return x + 1 | 0;}, _k_);
+     var _l_ = 4.;
+     f(function(x){return x * 2.;}, _l_);
      return cont(0);
     }
     //end
-    var test1 = caml_cps_closure(test1$0, test1$1);
-    //end
-    function test2$0(param){
-     var f = f$0();
-     f(_h_(), 7);
-     f(_j_(), cst_a);
-     return 0;
-    }
-    //end
-    function test2$1(param, cont){
-     var f = f$0(), _y_ = 7, _z_ = _h_();
+    function test2(param, cont){
+     function f(g, x, cont){return caml_cps_exact_call2(g, x, cont);}
+     var _f_ = 7;
+     function _g_(x, cont){return cont(x + 1 | 0);}
      return caml_cps_exact_call3
              (f,
-              _z_,
-              _y_,
-              function(_A_){
-               var _B_ = _j_();
+              _g_,
+              _f_,
+              function(_h_){
+               function _i_(x, cont){
+                return caml_cps_call3(Stdlib[28], x, cst_a$0, cont);
+               }
                return caml_cps_exact_call3
-                       (f, _B_, cst_a, function(_C_){return cont(0);});
+                       (f, _i_, cst_a, function(_j_){return cont(0);});
               });
     }
     //end
-    var test2 = caml_cps_closure(test2$0, test2$1);
-    //end
-    function test3$0(x){
+    function test3(x, cont){
      function F(symbol){function f(x){return x + 1 | 0;} return [0, f];}
-     var M1 = F([0]), M2 = F([0]), _x_ = caml_call1(M2[1], 2);
-     return [0, caml_call1(M1[1], 1), _x_];
+     var M1 = F([0]), M2 = F([0]), _e_ = M2[1].call(null, 2);
+     return cont([0, M1[1].call(null, 1), _e_]);
     }
     //end
-    function test3$1(x, cont){
-     function F(symbol){function f(x){return x + 1 | 0;} return [0, f];}
-     var M1 = F([0]), M2 = F([0]), _w_ = M2[1].call(null, 2);
-     return cont([0, M1[1].call(null, 1), _w_]);
-    }
-    //end
-    var test3 = caml_cps_closure(test3$0, test3$1);
-    //end
-    function test4$0(x){
-     function F(symbol){var f$0 = f(); return [0, f$0];}
-     var M1 = F([0]), M2 = F([0]);
-     caml_call1(M1[1], 1);
-     return caml_call1(M2[1], 2);
-    }
-    //end
-    function test4$1(x, cont){
-     function F(symbol){var f$0 = f(); return [0, f$0];}
-     var M1 = F([0]), M2 = F([0]), _t_ = 1, _u_ = M1[1];
+    function test4(x, cont){
+     function F(symbol){
+      function f(x, cont){return caml_cps_call3(Stdlib_Printf[2], _a_, x, cont);}
+      return [0, f];
+     }
+     var M1 = F([0]), M2 = F([0]), _b_ = 1, _c_ = M1[1];
      return caml_cps_exact_call2
-             (_u_,
-              _t_,
-              function(_v_){return caml_cps_exact_call2(M2[1], 2, cont);});
+             (_c_,
+              _b_,
+              function(_d_){return caml_cps_exact_call2(M2[1], 2, cont);});
     }
-    //end
-    var test4 = caml_cps_closure(test4$0, test4$1);
     //end |}]

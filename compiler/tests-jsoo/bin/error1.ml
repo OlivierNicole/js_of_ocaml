@@ -1,6 +1,3 @@
-(* Ignore OCAMLRUNPARAM=b to be reproducible *)
-let () = Printexc.record_backtrace false
-
 let () =
   match Array.to_list Sys.argv with
   | _ :: "unregister" :: _ ->

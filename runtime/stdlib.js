@@ -154,13 +154,11 @@ var caml_call_gen_tuple = (
 //Provides: caml_call_gen
 //Requires: caml_call_gen_tuple
 //If: effects
-//Weakdef
 var caml_call_gen = caml_call_gen_tuple[0];
 
 //Provides: caml_call_gen_cps
 //Requires: caml_call_gen_tuple
 //If: effects
-//Weakdef
 var caml_call_gen_cps = caml_call_gen_tuple[1];
 
 //Provides: caml_named_values
