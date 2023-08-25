@@ -68,7 +68,7 @@ module Flag = struct
 
   let effects = o ~name:"effects" ~default:false
 
-  let double_translation = o ~name:"effects" ~default:false
+  let double_translation = o ~name:"doubletranslate" ~default:false
 
   let staticeval = o ~name:"staticeval" ~default:true
 
