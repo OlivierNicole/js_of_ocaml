@@ -66,9 +66,70 @@ function caml_call_gen(f, args) {
   }
 }
 
+//Provides: caml_call_gen (const, shallow)
+//If: effects
+//If: !doubletranslate
+//Weakdef
+function caml_call_gen(f, args) {
+  var n = (f.l >= 0)?f.l:(f.l = f.length);
+  var argsLen = args.length;
+  var d = n - argsLen;
+  if (d == 0)
+    return f(...args);
+  else if (d < 0) {
+    var rest = args.slice(n - 1);
+    var k = args [argsLen - 1];
+    args = args.slice(0, n);
+    args[n - 1] = function (g) {
+      if(typeof g !== "function") return k(g);
+      var args = rest.slice();
+      args[args.length - 1] = k;
+      return caml_call_gen(g, args); };
+    return f(...args);
+  } else {
+    argsLen--;
+    var k = args [argsLen];
+    switch (d) {
+    case 1: {
+      var g = function (x, y){
+        var nargs = new Array(argsLen + 2);
+        for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
+        nargs[argsLen] = x;
+        nargs[argsLen + 1] = y;
+        return f.apply(null, nargs)
+      };
+      break;
+    }
+    case 2: {
+      var g = function (x, y, z){
+        var nargs = new Array(argsLen + 3);
+        for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
+        nargs[argsLen] = x;
+        nargs[argsLen + 1] = y;
+        nargs[argsLen + 2] = z;
+        return f.apply(null, nargs)
+      };
+      break;
+    }
+    default: {
+      var g = function (){
+        var extra_args = (arguments.length == 0)?1:arguments.length;
+        var nargs = new Array(argsLen + extra_args);
+        for(var i = 0; i < argsLen; i++ ) nargs[i] = args[i];
+        for(var i = 0; i < arguments.length; i++ )
+          nargs[argsLen + i] = arguments[i];
+        return caml_call_gen(f, nargs)
+      };
+    }}
+    g.l = d + 1;
+    return k(g);
+  }
+}
+
 //Provides: caml_call_gen_tuple (const, shallow)
 //Requires: caml_fiber_stack, caml_cps_closure
 //If: effects
+//If: doubletranslate
 //Weakdef
 var caml_call_gen_tuple = (
   function() {
@@ -154,12 +215,14 @@ var caml_call_gen_tuple = (
 //Provides: caml_call_gen
 //Requires: caml_call_gen_tuple
 //If: effects
+//If: doubletranslate
 //Weakdef
 var caml_call_gen = caml_call_gen_tuple[0];
 
 //Provides: caml_call_gen_cps
 //Requires: caml_call_gen_tuple
 //If: effects
+//If: doubletranslate
 //Weakdef
 var caml_call_gen_cps = caml_call_gen_tuple[1];
 

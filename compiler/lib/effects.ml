@@ -1180,32 +1180,34 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
     }
   in
   let p =
-    (* Initialize the global fiber stack and define a global identity function,
-       needed to translate [%resume] *)
-    let id_pc = p.free_pc in
-    let blocks =
-      let id_param = Var.fresh_n "x" in
-      Addr.Map.add
-        id_pc
-        { params = [ id_param ]; body = []; branch = Return id_param, noloc }
-        p.blocks
-    in
-    let id_arg = Var.fresh_n "x" in
-    let dummy = Var.fresh_n "dummy" in
-    let new_start = id_pc + 1 in
-    let blocks =
-      Addr.Map.add
-        new_start
-        { params = []
-        ; body =
-            [ Let (ident_fn, Closure ([ id_arg ], (id_pc, [ id_arg ]))), noloc
-            ; Let (dummy, Prim (Extern "caml_initialize_fiber_stack", [])), noloc
-            ]
-        ; branch = Branch (p.start, []), noloc
-        }
-        blocks
-    in
-    { start = new_start; blocks; free_pc = new_start + 1 }
+    if double_translate () then
+      (* Initialize the global fiber stack and define a global identity function,
+         needed to translate [%resume] *)
+      let id_pc = p.free_pc in
+      let blocks =
+        let id_param = Var.fresh_n "x" in
+        Addr.Map.add
+          id_pc
+          { params = [ id_param ]; body = []; branch = Return id_param, noloc }
+          p.blocks
+      in
+      let id_arg = Var.fresh_n "x" in
+      let dummy = Var.fresh_n "dummy" in
+      let new_start = id_pc + 1 in
+      let blocks =
+        Addr.Map.add
+          new_start
+          { params = []
+          ; body =
+              [ Let (ident_fn, Closure ([ id_arg ], (id_pc, [ id_arg ]))), noloc
+              ; Let (dummy, Prim (Extern "caml_initialize_fiber_stack", [])), noloc
+              ]
+          ; branch = Branch (p.start, []), noloc
+          }
+          blocks
+      in
+      { start = new_start; blocks; free_pc = new_start + 1 }
+    else p
   in
   p, !cps_calls, !single_version_closures
 
