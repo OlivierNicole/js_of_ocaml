@@ -25,8 +25,7 @@ let normalize x =
   |> Str.global_replace (Str.regexp "node\\(.exe\\)?") "%{NODE}"
 
 let%expect_test "uncaugh error" =
-  let prog =
-    {|
+  let prog = {|
 (* Ignore OCAMLRUNPARAM=b to be reproducible *)
 Printexc.record_backtrace false;;
 let _ = raise Not_found |}
