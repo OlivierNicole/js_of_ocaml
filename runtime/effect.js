@@ -43,9 +43,9 @@ The handlers are CPS-transformed functions: they actually take an
 additional parameter which is the current low-level continuation.
 
 Effect and exception handlers are CPS, single-version functions, meaning that
-are ordinary functions, unlike CPS-transformed functions which exist in both
-direct style and continuation-passing style.
-Low-level continuations are also ordinary functions.
+they are ordinary functions, unlike CPS-transformed functions which, if double
+translation is enabled, exist in both direct style and continuation-passing
+style. Low-level continuations are also ordinary functions.
 */
 
 //Provides: caml_exn_stack
@@ -73,6 +73,7 @@ function caml_pop_trap() {
 //Provides: uncaught_effect_handler
 //Requires: caml_named_value, caml_raise_constant, caml_raise_with_arg, caml_string_of_jsbytes, caml_fresh_oo_id, caml_resume_stack
 //If: effects
+//If: doubletranslate
 function uncaught_effect_handler(eff,k,ms) {
   // Resumes the continuation k by raising exception Unhandled.
   caml_resume_stack(k[1],ms);
@@ -94,6 +95,7 @@ var caml_fiber_stack;
 //Provides: caml_initialize_fiber_stack
 //Requires: caml_fiber_stack, uncaught_effect_handler
 //If: effects
+//If: doubletranslate
 function caml_initialize_fiber_stack() {
   caml_fiber_stack = {h:[0, 0, 0, uncaught_effect_handler], r:{k:0, x:0, e:0}};
 }
@@ -127,8 +129,22 @@ function caml_pop_fiber() {
   return rem.k;
 }
 
+//Provides: caml_prepare_tramp
+//If: effects
+//If: !doubletranslate
+function caml_prepare_tramp(handler) {
+  return handler;
+}
+
+//Provides: caml_prepare_tramp
+//If: effects
+//If: doubletranslate
+function caml_prepare_tramp(handler) {
+  return {cps: handler};
+}
+
 //Provides: caml_perform_effect
-//Requires: caml_pop_fiber, caml_stack_check_depth, caml_trampoline_return, caml_exn_stack, caml_fiber_stack
+//Requires: caml_pop_fiber, caml_stack_check_depth, caml_trampoline_return, caml_exn_stack, caml_fiber_stack, caml_prepare_tramp
 //If: effects
 function caml_perform_effect(eff, cont, k0) {
   // Allocate a continuation if we don't already have one
@@ -142,17 +158,47 @@ function caml_perform_effect(eff, cont, k0) {
   // The handler is defined in Stdlib.Effect, so we know that the arity matches
   var k1 = caml_pop_fiber();
   return caml_stack_check_depth()?handler(eff,cont,k1,k1)
-         :caml_trampoline_return({cps: handler},[eff,cont,k1,k1]);
+         :caml_trampoline_return(caml_prepare_tramp(handler),[eff,cont,k1,k1]);
+}
+
+//Provides: caml_call_fun
+//Requires: caml_call_gen
+//If: effects
+//If: !doubletranslate
+function caml_call_fun(f, args) {
+  return caml_call_gen(f, args);
+}
+
+//Provides: caml_call_fun
+//Requires: caml_call_gen_cps
+//If: effects
+//If: doubletranslate
+function caml_call_fun(f, args) {
+  return caml_call_gen_cps(f, args);
+}
+
+//Provides: caml_get_fun
+//If: effects
+//If: !doubletranslate
+function caml_get_fun(f) {
+  return f;
+}
+
+//Provides: caml_get_fun
+//If: effects
+//If: doubletranslate
+function caml_get_fun(f) {
+  return f.cps;
 }
 
 //Provides: caml_alloc_stack
-//Requires: caml_pop_fiber, caml_fiber_stack, caml_call_gen_cps, caml_stack_check_depth, caml_trampoline_return
+//Requires: caml_pop_fiber, caml_fiber_stack, caml_stack_check_depth, caml_trampoline_return, caml_call_fun, caml_get_fun
 //If: effects
 function caml_alloc_stack(hv, hx, hf) {
   function call(i, x) {
     var f=caml_fiber_stack.h[i];
     var args = [x, caml_pop_fiber()];
-    return caml_stack_check_depth()?caml_call_gen_cps(f,args)
+    return caml_stack_check_depth()?caml_call_fun(f,args)
            :caml_trampoline_return(f,args);
   }
   function hval(x) {
@@ -163,7 +209,7 @@ function caml_alloc_stack(hv, hx, hf) {
     // Call [hx] in the parent fiber
     return call(2, e);
   }
-  return [0, hval, [0, hexn, 0], [0, hv, hx, hf.cps], 0];
+  return [0, hval, [0, hexn, 0], [0, hv, hx, caml_get_fun(hf)], 0];
 }
 
 //Provides: caml_alloc_stack
@@ -220,6 +266,7 @@ function jsoo_effect_not_supported(){
 //Provides: caml_trampoline_cps
 //Requires:caml_stack_depth, caml_call_gen_cps, caml_exn_stack, caml_fiber_stack, caml_wrap_exception
 //If: effects
+//If: doubletranslate
 function caml_trampoline_cps(f, args) {
   /* Note: f is not an ordinary function but a (direct-style, CPS) closure pair */
   var res = {joo_tramp: f, joo_args: args};
@@ -241,6 +288,7 @@ function caml_trampoline_cps(f, args) {
 
 //Provides: caml_cps_closure
 //If: effects
+//If: doubletranslate
 function caml_cps_closure(direct_f, cps_f) {
   direct_f.cps = cps_f;
   return direct_f;
