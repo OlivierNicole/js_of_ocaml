@@ -1424,11 +1424,10 @@ let f (p, live_vars) =
         debug_print "@[<v>After lambda lifting...@,";
         Code.Print.program (fun _ _ -> "") p;
         debug_print "@]");
-        p, lifter_functions, cps_needed)
-    else (
+      p, lifter_functions, cps_needed)
+    else
       let p, cps_needed = rewrite_toplevel ~cps_needed p in
-      p, cps_needed, Var.Set.empty
-    )
+      p, Var.Set.empty, cps_needed
   in
   let p = split_blocks ~cps_needed ~lifter_functions p in
   let p, cps_calls, single_version_closures =
