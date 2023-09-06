@@ -672,7 +672,7 @@ let duplicate_code ~st pc =
   st.new_blocks <- new_blocks, free_pc;
   Addr.Map.find pc new_pc_of_old
 
-let cps_instr ~st ~lifter_functions (instr : instr) : instr list =
+let cps_instr ~st ~lifter_functions:_ (* <- TODO: remove *) (instr : instr) : instr list =
   match instr with
   | Let (x, Closure (params, ((pc, _) as cont)))
     when Var.Set.mem x st.cps_needed && not (Var.Set.mem x !(st.single_version_closures))
@@ -714,8 +714,9 @@ let cps_instr ~st ~lifter_functions (instr : instr) : instr list =
         Var.idx f >= Var.Tbl.length st.flow_info.info_approximation
         || Global_flow.exact_call st.flow_info f (List.length args));
       [ Let (x, Apply { f; args; exact = true }) ]
-  | Let (_, Apply { f; args = _; exact = _ }) when Var.Set.mem f lifter_functions ->
-      (* Nothing to do for lifter functions. *)
+  | Let (_, Apply { f; args = _; exact = _ })
+    when Var.Set.mem f !(st.single_version_closures) ->
+      (* Nothing to do for single-version functions. *)
       [ instr ]
   | Let (_, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) ->
       assert false
@@ -960,7 +961,19 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
   let ident_fn = Var.fresh_n "identity" in
   let closure_info = Hashtbl.create 16 in
   let cps_calls = ref Var.Set.empty in
-  let single_version_closures = ref lifter_functions in
+  let single_version_closures =
+    ref
+      (if double_translate ()
+       then lifter_functions
+       else
+         Code.fold_closures
+           p
+           (fun name _ _ acc ->
+             match name with
+             | None -> acc
+             | Some name -> Var.Set.add name acc)
+           Var.Set.empty)
+  in
   let cps_pc_of_direct = Hashtbl.create 512 in
   let p, bound_subst, param_subst, new_blocks =
     Code.fold_closures_innermost_first

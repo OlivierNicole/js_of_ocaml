@@ -266,12 +266,13 @@ module Share = struct
             (Printf.sprintf
                "caml_%scall%d"
                (match exact, cps, single_version with
-               | true, true, false -> "cps_exact_"
-               | true, true, true -> "cps_exact_mono_"
-               | false, false, false -> ""
+               | true, true, false -> "cps_exact_double_"
+               | true, true, true -> "cps_exact_"
+               | false, false, false -> "double"
+               | false, false, true -> ""
                | false, true, false -> "cps_"
                | true, false, _ (* Should not happen: no intermediary function needed *)
-               | false, _, true (* Single-version functions are always exact *) ->
+               | false, true, true (* Single-version CPS functions are always exact *) ->
                    assert false)
                arity)
         in
@@ -1000,8 +1001,12 @@ let apply_fun_raw =
               , int n )
           , apply_directly real_closure params
           , J.call
-              (* Note: [caml_call_gen*] functions takes a two-version function *)
-              (runtime_fun ctx (if cps then "caml_call_gen_cps" else "caml_call_gen"))
+              (* Note: when double translation is enabled, [caml_call_gen*] functions takes a two-version function *)
+              (runtime_fun
+                 ctx
+                 (if cps && Config.Flag.double_translation ()
+                  then "caml_call_gen_cps"
+                  else "caml_call_gen"))
               [ f; J.array params ]
               J.N )
     in
