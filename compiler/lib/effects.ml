@@ -854,7 +854,8 @@ let rewrite_direct_instr ~st (instr, loc) =
       | Pc (Int a) ->
           ( Let
               ( x
-              , Prim (Extern "caml_alloc_dummy_function", [ size; Pc (Int (Int32.succ a)) ])
+              , Prim
+                  (Extern "caml_alloc_dummy_function", [ size; Pc (Int (Int32.succ a)) ])
               )
           , loc )
       | _ -> assert false)
@@ -871,10 +872,19 @@ let rewrite_direct_instr ~st (instr, loc) =
    creations to take into account the fact that some closures must now have a
    CPS version. Also rewrite the effect primitives to switch to the CPS version
    of functions (for resume) or fail (for perform).
-   If not double-translating, then  *)
-let rewrite_direct_block ~st ~cps_needed ~closure_info ~ident_fn ~pc ~lifter_functions block =
+   If not double-translating, then just add continuation arguments to function
+   definitions, and mark as exact all non-CPS calls. *)
+let rewrite_direct_block
+    ~st
+    ~cps_needed
+    ~closure_info
+    ~ident_fn
+    ~pc
+    ~lifter_functions
+    block =
   debug_print "@[<v>rewrite_direct_block %d@,@]" pc;
-  if double_translate () then
+  if double_translate ()
+  then
     let rewrite_instr = function
       | Let (x, Closure (params, ((pc, _) as cont)))
         when Var.Set.mem x cps_needed && not (Var.Set.mem x lifter_functions) ->
@@ -899,14 +909,18 @@ let rewrite_direct_block ~st ~cps_needed ~closure_info ~ident_fn ~pc ~lifter_fun
           (* Perform the effect, which should call the "Unhandled effect" handler. *)
           let k = Int 0l in
           (* Dummy continuation *)
-          [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pc (Int 0l); Pc k ])) ]
+          [ Let (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pc (Int 0l); Pc k ]))
+          ]
       | Let (x, Prim (Extern "%reperform", [ Pv effect; Pv continuation ])) ->
           (* Similar to previous case *)
           let k = Int 0l in
           [ Let
-              (x, Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ]))
+              ( x
+              , Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ])
+              )
           ]
-      | (Let _ | Assign _ | Set_field _ | Offset_ref _ | Array_set _) as instr -> [ instr ]
+      | (Let _ | Assign _ | Set_field _ | Offset_ref _ | Array_set _) as instr ->
+          [ instr ]
     in
     let body =
       (* For each instruction... *)
@@ -917,8 +931,7 @@ let rewrite_direct_block ~st ~cps_needed ~closure_info ~ident_fn ~pc ~lifter_fun
           |> List.map ~f:(fun i -> i, loc))
     in
     { block with body }
-  else
-    { block with body = List.map ~f:(rewrite_direct_instr ~st) block.body }
+  else { block with body = List.map ~f:(rewrite_direct_instr ~st) block.body }
 
 (* Apply a substitution in a set of blocks *)
 let subst_in_blocks blocks s =
@@ -1114,9 +1127,8 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
               let k = Var.fresh_n "cont" in
               Hashtbl.add st.closure_info initial_start (params @ [ k ], (start', args));
               ( param_subst
-              , ( fun pc block -> cps_block ~st ~lifter_functions ~k ~orig_pc:pc block
-                , None ))
-            )
+              , fun pc block -> cps_block ~st ~lifter_functions ~k ~orig_pc:pc block, None
+              ))
             else
               ( param_subst
               , fun pc block ->
@@ -1196,7 +1208,8 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
     }
   in
   let p =
-    if double_translate () then
+    if double_translate ()
+    then
       (* Initialize the global fiber stack and define a global identity function,
          needed to translate [%resume] *)
       let id_pc = p.free_pc in
@@ -1425,10 +1438,13 @@ let f (p, live_vars) =
   let flow_info = Global_flow.f ~fast:false p in
   let cps_needed = Partial_cps_analysis.f p flow_info in
   let p, lifter_functions, cps_needed =
-    if double_translate () then (
+    if double_translate ()
+    then (
       let p, lifter_functions, liftings = Lambda_lifting_simple.f ~to_lift:cps_needed p in
       let cps_needed =
-        Var.Set.map (fun f -> try Subst.from_map liftings f with Not_found -> f) cps_needed
+        Var.Set.map
+          (fun f -> try Subst.from_map liftings f with Not_found -> f)
+          cps_needed
       in
       if debug ()
       then (
