@@ -998,7 +998,8 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
            params
            (start, args)
            (({ blocks; free_pc; _ } as p), bound_subst, param_subst, new_blocks) ->
-        Option.iter name_opt ~f:(fun v -> debug_print "cname = %s" @@ Var.to_string v);
+        Option.iter name_opt ~f:(fun v ->
+            debug_print "@[<v>cname = %s@,@]" @@ Var.to_string v);
         (* We speculatively add a block at the beginning of the
            function. In case of tail-recursion optimization, the
            function implementing the loop body may have to be placed
