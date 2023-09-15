@@ -164,7 +164,10 @@ module Share = struct
               | Let (_, Constant c) -> get_constant c share
               | Let (x, Apply { args; exact; _ }) ->
                   let cps = Var.Set.mem x cps_calls in
-                  let single_version = Var.Set.mem x single_version_closures in
+                  let single_version =
+                    (not (Config.Flag.double_translation ()))
+                    || Var.Set.mem x single_version_closures
+                  in
                   if (not exact) || cps
                   then
                     add_apply
@@ -271,8 +274,11 @@ module Share = struct
                | false, false, false -> "double"
                | false, false, true -> ""
                | false, true, false -> "cps_"
-               | true, false, _ (* Should not happen: no intermediary function needed *)
-               | false, true, true (* Single-version CPS functions are always exact *) ->
+               | false, true, true ->
+                   assert (not (Config.Flag.double_translation ()));
+                   "cps_"
+               | true, false, _ ->
+                   (* Should not happen: no intermediary function needed *)
                    assert false)
                arity)
         in
@@ -1246,7 +1252,10 @@ let rec translate_expr ctx queue loc x e level : _ * J.statement_list =
   match e with
   | Apply { f; args; exact } ->
       let cps = Var.Set.mem x ctx.Ctx.cps_calls in
-      let single_version = Var.Set.mem f ctx.Ctx.single_version_closures in
+      let single_version =
+        (not (Config.Flag.double_translation ()))
+        || Var.Set.mem f ctx.Ctx.single_version_closures
+      in
       let args, prop, queue =
         List.fold_right
           ~f:(fun x (args, prop, queue) ->
