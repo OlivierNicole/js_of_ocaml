@@ -671,6 +671,12 @@ let duplicate_code ~st pc =
 
 let cps_instr ~st ~lifter_functions:_ (* <- TODO: remove *) (instr : instr) : instr list =
   match instr with
+  | Let (x, Closure (_, (pc, _)))
+    when Var.Set.mem x st.cps_needed && Var.Set.mem x !(st.single_version_closures) ->
+      (* Add the continuation parameter, and change the initial block if
+         needed *)
+      let cps_params, cps_cont = Hashtbl.find st.closure_info pc in
+      [ Let (x, Closure (cps_params, cps_cont)) ]
   | Let (x, Closure (params, ((pc, _) as cont)))
     when Var.Set.mem x st.cps_needed && not (Var.Set.mem x !(st.single_version_closures))
     ->
@@ -1122,7 +1128,7 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
             else if function_needs_cps && not (double_translate ())
             then (
               let k = Var.fresh_n "cont" in
-              Hashtbl.add st.closure_info initial_start (params @ [ k ], (start', args));
+              Hashtbl.add st.closure_info initial_start (params @ [ k ], (start, args));
               ( param_subst
               , fun pc block -> cps_block ~st ~lifter_functions ~k ~orig_pc:pc block, None
               ))
