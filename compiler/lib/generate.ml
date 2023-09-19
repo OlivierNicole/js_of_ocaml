@@ -1024,7 +1024,7 @@ let apply_fun_raw =
          bounce to a trampoline if needed, to avoid a stack overflow.
          The trampoline then performs the call in an shorter stack. *)
       let f =
-        if single_version
+        if single_version && Config.Flag.double_translation ()
         then J.(EObj [ Property (PNS (Utf8_string.of_string_exn "cps"), f) ])
         else f
       in
