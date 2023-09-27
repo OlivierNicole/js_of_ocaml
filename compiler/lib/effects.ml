@@ -354,7 +354,8 @@ let cps_jump_cont ~st ~src ((pc, _) as cont) loc =
       in
       call_block, []
 
-let do_alloc_jump_closures ~st to_allocate =
+let do_alloc_jump_closures ~st (to_allocate : (Var.t * Code.Addr.t) list) :
+    (instr * loc) list =
   List.map to_allocate ~f:(fun (cname, jump_pc) ->
       let params =
         let jump_block = Addr.Map.find jump_pc st.blocks in
@@ -1167,18 +1168,23 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
               st.blocks
           in
           let new_blocks_this_clos, free_pc = st.new_blocks in
-          (* All variables bound in the CPS version will have to be subst with fresh ones
-             to avoid clashing with the definitions in the original blocks (the actual
-             substitution is done later). *)
-          let bound =
-            Addr.Map.fold
-              (fun _ block bound ->
-                Var.Set.union bound (Freevars.block_bound_vars ~closure_params:true block))
-              new_blocks_this_clos
-              Var.Set.empty
-          in
+          (* If double-translating, all variables bound in the CPS version will have to be
+             subst with fresh ones to avoid clashing with the definitions in the original
+             blocks (the actual substitution is done later). *)
           let bound_subst =
-            Var.Set.fold (fun v m -> Var.Map.add v (Var.fork v) m) bound bound_subst
+            if double_translate ()
+            then
+              let bound =
+                Addr.Map.fold
+                  (fun _ block bound ->
+                    Var.Set.union
+                      bound
+                      (Freevars.block_bound_vars ~closure_params:true block))
+                  new_blocks_this_clos
+                  Var.Set.empty
+              in
+              Var.Set.fold (fun v m -> Var.Map.add v (Var.fork v) m) bound bound_subst
+            else bound_subst
           in
           let blocks = Addr.Map.fold Addr.Map.add new_blocks_this_clos blocks in
           ( blocks
