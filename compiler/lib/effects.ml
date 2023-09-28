@@ -673,7 +673,7 @@ let duplicate_code ~st pc =
   st.new_blocks <- new_blocks, free_pc;
   Addr.Map.find pc new_pc_of_old
 
-let cps_instr ~st ~lifter_functions:_ (* <- TODO: remove *) (instr : instr) : instr list =
+let cps_instr ~st (instr : instr) : instr list =
   match instr with
   | Let (x, Closure (_, (pc, _)))
     when Var.Set.mem x st.cps_needed && Var.Set.mem x !(st.single_version_closures) ->
@@ -822,7 +822,7 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
           (* For each instruction... *)
           List.map body_prefix ~f:(fun (i, loc) ->
               (* ... apply [cps_instr] ... *)
-              cps_instr ~st ~lifter_functions i
+              cps_instr ~st i
               (* ... and decorate all resulting instructions with [loc] *)
               |> List.map ~f:(fun i -> i, loc))
           |> List.concat
@@ -836,7 +836,7 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
           (* For each instruction... *)
           List.map block.body ~f:(fun (i, loc) ->
               (* ... apply [cps_instr] ... *)
-              cps_instr ~st ~lifter_functions i
+              cps_instr ~st i
               (* ... and decorate all resulting instructions with [loc] *)
               |> List.map ~f:(fun i -> i, loc))
           |> List.concat
