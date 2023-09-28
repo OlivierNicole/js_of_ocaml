@@ -301,7 +301,9 @@ let compile_to_javascript
       [ (if pretty then [ "--pretty" ] else [])
       ; (if sourcemap then [ "--sourcemap" ] else [])
       ; (if effects then [ "--enable=effects" ] else [ "--disable=effects" ])
-      ; (if doubletranslate then [ "--enable=doubletranslate" ] else [ "--disable=doubletranslate" ])
+      ; (if doubletranslate
+         then [ "--enable=doubletranslate" ]
+         else [ "--disable=doubletranslate" ])
       ; (if use_js_string
          then [ "--enable=use-js-string" ]
          else [ "--disable=use-js-string" ])
@@ -510,9 +512,15 @@ class find_double_function_declaration r n =
           List.iter l ~f:(function
               | DeclIdent
                   ( S { name = Utf8 name; _ }
-                  , Some ((ECall (EVar (S { name = Utf8 "caml_cps_closure"; _ }), _, [ Arg e1; Arg e2 ], _)), _) ) as var_decl -> (
+                  , Some
+                      ( ECall
+                          ( EVar (S { name = Utf8 "caml_cps_closure"; _ })
+                          , _
+                          , [ Arg e1; Arg e2 ]
+                          , _ )
+                      , _ ) ) as var_decl ->
                   let decls = var_decl, e1, e2 in
-                  if String.equal name n then r := decls :: !r else ())
+                  if String.equal name n then r := decls :: !r else ()
               | _ -> ())
       | _ -> ());
       super#statement s
@@ -529,7 +537,7 @@ let print_double_fun_decl program n =
     | _ -> print_endline "not found"
   in
   match !r with
-  | [ var_decl, e1, e2 ] ->
+  | [ (var_decl, e1, e2) ] ->
       maybe_print_decl e1;
       maybe_print_decl e2;
       print_string (program_to_string [ J.(Variable_statement (Var, [ var_decl ]), N) ])
