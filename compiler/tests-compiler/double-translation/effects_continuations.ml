@@ -282,12 +282,12 @@ let%expect_test "test-compiler/lib-effects/test1.ml" =
     var loop2 = caml_cps_closure(loop2$0, loop2$1);
     //end
     function loop3$0(param){
-     var l = caml_doublecall1(Stdlib_List[9], _l_), x = l;
+     var l = caml_doublecall1(Stdlib_List[10], _l_), x = l;
      for(;;){if(! x) return l; var r = x[2], x = r;}
     }
     //end
     function loop3$1(param, cont){
-     var _m_ = Stdlib_List[9];
+     var _m_ = Stdlib_List[10];
      return caml_cps_call2
              (_m_,
               _l_,
