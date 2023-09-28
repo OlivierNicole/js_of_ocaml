@@ -1249,7 +1249,29 @@ let cps_transform ~lifter_functions ~live_vars ~flow_info ~cps_needed p =
           blocks
       in
       { start = new_start; blocks; free_pc = new_start + 1 }
-    else p
+    else
+      match Hashtbl.find_opt closure_info p.start with
+      | None -> p
+      | Some (cps_params, cps_cont) ->
+          (* Call [caml_callback] to set up the execution context. *)
+          let new_start = p.free_pc in
+          let blocks =
+            let main = Var.fresh () in
+            let args = Var.fresh () in
+            let res = Var.fresh () in
+            Addr.Map.add
+              new_start
+              { params = []
+              ; body =
+                  [ Let (main, Closure (cps_params, cps_cont)), noloc
+                  ; Let (args, Prim (Extern "%js_array", [])), noloc
+                  ; Let (res, Prim (Extern "caml_callback", [ Pv main; Pv args ])), noloc
+                  ]
+              ; branch = Return res, noloc
+              }
+              p.blocks
+          in
+          { start = new_start; blocks; free_pc = new_start + 1 }
   in
   p, !cps_calls, !single_version_closures
 
