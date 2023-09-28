@@ -487,7 +487,7 @@ let f (p, single_version_closures) : Code.program * Effects.single_version_closu
   let p = { p with blocks; free_pc } in
   let p =
     List.fold_left !rewrite_list ~init:p ~f:(fun program (mapping, pc) ->
-        Subst.cont mapping pc program)
+        Subst.Excluding_Binders.cont mapping pc program)
   in
   Code.invariant p;
   p, single_version_closures

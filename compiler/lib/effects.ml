@@ -946,7 +946,7 @@ let subst_in_blocks blocks s =
         debug_print "@[<v>block before first subst: @,";
         Code.Print.block (fun _ _ -> "") pc block;
         debug_print "@]");
-      let res = Subst.block s block in
+      let res = Subst.Excluding_Binders.block s block in
       if debug ()
       then (
         debug_print "@[<v>block after first subst: @,";
@@ -964,7 +964,7 @@ let subst_bound_in_blocks blocks s =
         debug_print "@[<v>block before first subst: @,";
         Code.Print.block (fun _ _ -> "") pc block;
         debug_print "@]");
-      let res = Subst.Bound.block s block in
+      let res = Subst.Including_Binders.block s block in
       if debug ()
       then (
         debug_print "@[<v>block after first subst: @,";
