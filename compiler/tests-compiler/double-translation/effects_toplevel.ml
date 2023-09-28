@@ -23,6 +23,7 @@ let%expect_test "test-compiler/lib-effects/test1.ml" =
   let code =
     compile_and_parse
       ~effects:true
+      ~doubletranslate:true
       {|
          (* Function calls at toplevel outside of loops use
             [caml_callback]. *)
@@ -39,56 +40,47 @@ let%expect_test "test-compiler/lib-effects/test1.ml" =
        "use strict";
        var
         runtime = globalThis.jsoo_runtime,
-        caml_callback = runtime.caml_callback,
         caml_string_of_jsbytes = runtime.caml_string_of_jsbytes;
-       function caml_cps_exact_call1(f, a0){
-        return runtime.caml_stack_check_depth()
+       function caml_doublecall1(f, a0){
+        return (f.l >= 0 ? f.l : f.l = f.length) == 1
                 ? f(a0)
-                : runtime.caml_trampoline_return(f, [a0]);
+                : runtime.caml_call_gen(f, [a0]);
        }
        function caml_cps_call2(f, a0, a1){
         return runtime.caml_stack_check_depth()
-                ? (f.l
+                ? (f.cps.l
                     >= 0
-                    ? f.l
-                    : f.l = f.length)
+                    ? f.cps.l
+                    : f.cps.l = f.cps.length)
                   == 2
-                  ? f(a0, a1)
-                  : runtime.caml_call_gen(f, [a0, a1])
+                  ? f.cps.call(null, a0, a1)
+                  : runtime.caml_call_gen_cps(f, [a0, a1])
                 : runtime.caml_trampoline_return(f, [a0, a1]);
        }
-       function caml_cps_exact_call2(f, a0, a1){
-        return runtime.caml_stack_check_depth()
-                ? f(a0, a1)
-                : runtime.caml_trampoline_return(f, [a0, a1]);
-       }
+       runtime.caml_initialize_fiber_stack();
        var
         global_data = runtime.caml_get_global_data(),
-        Stdlib_Printf = global_data.Stdlib__Printf,
         _b_ =
           [0,
            [11, caml_string_of_jsbytes("abc"), 0],
-           caml_string_of_jsbytes("abc")];
-       function g(param, cont){
+           caml_string_of_jsbytes("abc")],
+        Stdlib_Printf = global_data.Stdlib__Printf;
+       function g$0(param){return caml_doublecall1(Stdlib_Printf[2], _b_);}
+       function g$1(param, cont){
         return caml_cps_call2(Stdlib_Printf[2], _b_, cont);
        }
-       caml_callback(g, [0]);
-       var _c_ = 1;
-       function _d_(i){
-        var _e_ = 0;
-        return caml_cps_exact_call2
-                (g,
-                 _e_,
-                 function(_f_){
-                  var _g_ = i + 1 | 0;
-                  if(5 !== i) return caml_cps_exact_call1(_d_, _g_);
-                  caml_callback(g, [0]);
-                  var Test = [0];
-                  runtime.caml_register_global(2, Test, "Test");
-                  return;
-                 });
+       var g = runtime.caml_cps_closure(g$0, g$1);
+       g(0);
+       var i = 1;
+       for(;;){
+        g(0);
+        var _c_ = i + 1 | 0;
+        if(5 !== i){var i = _c_; continue;}
+        g(0);
+        var Test = [0];
+        runtime.caml_register_global(2, Test, "Test");
+        return;
        }
-       return _d_(_c_);
       }
       (globalThis));
     //end |}]
