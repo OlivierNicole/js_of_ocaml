@@ -1,0 +1,17 @@
+(env
+ (_
+  (js_of_ocaml
+   (flags
+    (:standard --enable effects,doubletranslate))
+   ;; separate compilation doesn't work when using
+   ;; features such as 'effects' or 'use-js-string'
+   ;; because dune doesn't know that it should compile
+   ;; multiple versions of the dependencies
+   (compilation_mode whole_program))))
+
+(executable
+ (name generator)
+ (flags
+  (:standard
+   (-warn-error -A)))
+ (modes js))
