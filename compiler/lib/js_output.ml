@@ -1905,8 +1905,8 @@ let program ?(accept_unnamed_var = false) f ?source_map p =
   let names = Hashtbl.create 17 in
   let contents : string option list ref option =
     match source_map with
-    | None | Some { Source_map.sources_content = None; _ } -> None
-    | Some { Source_map.sources_content = Some _; _ } -> Some (ref [])
+    | None | Some { Source_map.sources_contents = None; _ } -> None
+    | Some { Source_map.sources_contents = Some _; _ } -> Some (ref [])
   in
   let push_mapping, get_file_index, get_name_index, source_map_enabled =
     let source_map_enabled =
@@ -1925,7 +1925,10 @@ let program ?(accept_unnamed_var = false) f ?source_map p =
                 Option.iter contents ~f:(fun r -> r := y :: !r);
                 loop xs ys
           in
-          loop sm.sources (Option.value ~default:[] sm.sources_content);
+          let sources_contents =
+            Option.map ~f:Source_map.Sources_contents.decode sm.sources_contents
+          in
+          loop sm.sources (Option.value ~default:[] sources_contents);
           List.iter sm.Source_map.names ~f:(fun f ->
               Hashtbl.add names f (Hashtbl.length names));
           true
@@ -1979,10 +1982,10 @@ let program ?(accept_unnamed_var = false) f ?source_map p =
     | Some sm ->
         let sources = hashtbl_to_list files in
         let names = hashtbl_to_list names in
-        let sources_content =
-          match contents with
-          | None -> None
-          | Some r -> Some (List.rev !r)
+        let sources_contents =
+          let open Option.Syntax in
+          let* r = contents in
+          Option.return (Source_map.Sources_contents.encode (List.rev !r))
         in
         let sources =
           List.map sources ~f:(fun filename ->
@@ -1990,8 +1993,9 @@ let program ?(accept_unnamed_var = false) f ?source_map p =
               | None -> filename
               | Some _ -> Filename.concat "/builtin" filename)
         in
+        let sm_mappings = Source_map.Mappings.decode sm.mappings in
         let mappings =
-          List.rev_append_map !temp_mappings sm.mappings ~f:(fun (pos, m) ->
+          List.rev_append_map !temp_mappings sm_mappings ~f:(fun (pos, m) ->
               let gen_line = pos.PP.p_line + 1 in
               let gen_col = pos.PP.p_col in
               match m with
@@ -2006,7 +2010,8 @@ let program ?(accept_unnamed_var = false) f ?source_map p =
                   Source_map.Gen_Ori_Name
                     { gen_line; gen_col; ori_source; ori_line; ori_col; ori_name })
         in
-        Some { sm with Source_map.sources; names; sources_content; mappings }
+        let mappings = Source_map.Mappings.encode mappings in
+        Some { sm with Source_map.sources; names; sources_contents; mappings }
   in
   PP.check f;
   (if stats ()

@@ -26,3 +26,9 @@ val to_string : t -> string
 val to_file : t -> string -> unit
 
 val of_string : string -> t
+
+module Composite : sig
+  val to_string : Composite.t -> string
+
+  val to_file : Composite.t -> string -> unit
+end

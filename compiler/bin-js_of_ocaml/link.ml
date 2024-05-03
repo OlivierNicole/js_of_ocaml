@@ -106,9 +106,9 @@ let options =
             ; file
             ; sourceroot = sourcemap_root
             ; sources = []
-            ; sources_content = Some []
+            ; sources_contents = Some (Source_map.Sources_contents.encode [])
             ; names = []
-            ; mappings = []
+            ; mappings = Source_map.Mappings.empty
             } )
       else None
     in

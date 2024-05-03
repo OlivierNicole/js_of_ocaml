@@ -99,9 +99,9 @@ module Line_writer : sig
 
   val of_channel : out_channel -> t
 
-  val write : ?source:Line_reader.t -> t -> string -> unit
+  val write : ?source:Line_reader.t -> t -> string -> int
 
-  val write_lines : ?source:Line_reader.t -> t -> string -> unit
+  val write_lines : ?source:Line_reader.t -> t -> string -> int
 
   val lnum : t -> int
 end = struct
@@ -134,17 +134,20 @@ end = struct
     output_string t.oc "\n";
     let lnum_off = lnum_off + 1 in
     t.source <- source;
-    t.lnum <- t.lnum + lnum_off
+    t.lnum <- t.lnum + lnum_off;
+    lnum_off
 
   let write_lines ?source t lines =
+    let lnum = t.lnum in
     let l = String.split_on_char ~sep:'\n' lines in
     let rec w = function
       | [ "" ] | [] -> ()
       | s :: xs ->
-          write ?source t s;
+          let _ = write ?source t s in
           w xs
     in
-    w l
+    w l;
+    t.lnum - lnum
 
   let lnum t = t.lnum
 end
@@ -318,12 +321,26 @@ let link ~output ~linkall ~mklib ~toplevel ~files ~resolve_sourcemap_url ~source
       in
       let sm_for_file = ref None in
       let ic = Line_reader.open_ file in
-      let skip ic = Line_reader.drop ic in
-      let reloc = ref [] in
+      let old_line_count = Line_writer.lnum oc in
+      let edits = ref [] in
+      let skip ic =
+        edits := Source_map.Line_edits.Drop :: !edits;
+        Line_reader.drop ic
+      in
       let copy ic oc =
         let line = Line_reader.next ic in
-        Line_writer.write ~source:ic oc line;
-        reloc := (Line_reader.lnum ic, Line_writer.lnum oc) :: !reloc
+        let count = Line_writer.write ~source:ic oc line in
+        if count > 1
+        then edits := Source_map.Line_edits.Add { count = count - 1 } :: !edits;
+        edits := Source_map.Line_edits.Keep :: !edits
+      in
+      let write_line oc str =
+        let count = Line_writer.write oc str in
+        edits := Source_map.Line_edits.(Add { count }) :: !edits
+      in
+      let write_lines oc str =
+        let count = Line_writer.write_lines oc str in
+        edits := Source_map.Line_edits.(Add { count }) :: !edits
       in
       let rec read () =
         match Line_reader.peek ic with
@@ -342,7 +359,7 @@ let link ~output ~linkall ~mklib ~toplevel ~files ~resolve_sourcemap_url ~source
                 if not !build_info_emitted
                 then (
                   let bi = Build_info.with_kind bi (if mklib then `Cma else `Unknown) in
-                  Line_writer.write_lines oc (Build_info.to_string bi);
+                  write_lines oc (Build_info.to_string bi);
                   build_info_emitted := true)
             | Drop -> skip ic
             | Unit ->
@@ -358,7 +375,7 @@ let link ~output ~linkall ~mklib ~toplevel ~files ~resolve_sourcemap_url ~source
                   (if mklib
                    then
                      let u = if linkall then { u with force_link = true } else u in
-                     Line_writer.write_lines oc (Unit_info.to_string u));
+                     write_lines oc (Unit_info.to_string u));
                   let size = ref 0 in
                   while
                     match Line_reader.peek ic with
@@ -402,7 +419,7 @@ let link ~output ~linkall ~mklib ~toplevel ~files ~resolve_sourcemap_url ~source
             read ()
       in
       read ();
-      Line_writer.write oc "";
+      write_line oc "";
       Line_reader.close ic;
       (match is_runtime with
       | None -> ()
@@ -424,10 +441,10 @@ let link ~output ~linkall ~mklib ~toplevel ~files ~resolve_sourcemap_url ~source
             (Parse_bytecode.Debug.create ~include_cmis:false false)
             code;
           let content = Buffer.contents b in
-          Line_writer.write_lines oc content);
+          write_lines oc content);
       (match !sm_for_file with
       | None -> ()
-      | Some x -> sm := (x, !reloc) :: !sm);
+      | Some x -> sm := (x, List.rev !edits, Line_writer.lnum oc - old_line_count) :: !sm);
       match !build_info, build_info_for_file with
       | None, None -> ()
       | Some _, None -> ()
@@ -440,32 +457,49 @@ let link ~output ~linkall ~mklib ~toplevel ~files ~resolve_sourcemap_url ~source
   match source_map with
   | None -> ()
   | Some (file, init_sm) ->
-      let sm =
-        List.rev_map !sm ~f:(fun (sm, reloc) ->
-            let tbl = Hashtbl.create 17 in
-            List.iter reloc ~f:(fun (a, b) -> Hashtbl.add tbl a b);
-            Source_map.filter_map sm ~f:(Hashtbl.find_opt tbl))
+      let sourcemaps_and_line_counts =
+        List.rev_map !sm ~f:(fun (sm, edits, lcount) ->
+            let mappings = sm.Source_map.mappings in
+            let mappings = Source_map.Mappings.edit ~strict:false mappings edits in
+            { sm with mappings }, lcount)
       in
-      (match Source_map.merge (init_sm :: sm) with
-      | None -> ()
-      | Some sm -> (
-          (* preserve some info from [init_sm] *)
-          let sm =
-            { sm with
-              version = init_sm.version
-            ; file = init_sm.file
-            ; sourceroot = init_sm.sourceroot
-            }
-          in
-          match file with
-          | None ->
-              let data = Source_map_io.to_string sm in
-              let s = sourceMappingURL_base64 ^ Base64.encode_exn data in
-              Line_writer.write oc s
-          | Some file ->
-              Source_map_io.to_file sm file;
-              let s = sourceMappingURL ^ Filename.basename file in
-              Line_writer.write oc s));
+      let merged_sourcemap =
+        let open Source_map in
+        assert (
+          match init_sm.mappings with
+          | Uninterpreted "" -> true
+          | _ -> false);
+        { version = init_sm.version
+        ; file = init_sm.file
+        ; Composite.sections =
+            (let _, sections =
+               List.fold_right
+                 sourcemaps_and_line_counts
+                 ~f:(fun (sm, generated_line_count) (cur_ofs, sections) ->
+                   let offset = Composite.{ gen_line = cur_ofs; gen_column = 0 } in
+                   cur_ofs + generated_line_count, (offset, `Map sm) :: sections)
+                 ~init:(0, [])
+             in
+             List.rev sections)
+        }
+      in
+      (* preserve some info from [init_sm] *)
+      let merged_sourcemap =
+        { merged_sourcemap with
+          sections =
+            List.map merged_sourcemap.sections ~f:(fun (ofs, `Map sm) ->
+                ofs, `Map { sm with sourceroot = init_sm.sourceroot })
+        }
+      in
+      (match file with
+      | None ->
+          let data = Source_map_io.Composite.to_string merged_sourcemap in
+          let s = sourceMappingURL_base64 ^ Base64.encode_exn data in
+          Line_writer.write oc s |> ignore
+      | Some file ->
+          Source_map_io.Composite.to_file merged_sourcemap file;
+          let s = sourceMappingURL ^ Filename.basename file in
+          Line_writer.write oc s |> ignore);
       if times () then Format.eprintf "  sourcemap: %a@." Timer.print t
 
 let link ~output ~linkall ~mklib ~toplevel ~files ~resolve_sourcemap_url ~source_map =
