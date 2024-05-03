@@ -5,6 +5,7 @@
 * Misc: CI uses opam.2.2 and no longer use sunset repo
 * Runtime: change Sys.os_type on windows (Cygwin -> Win32)
 * Compiler: speedup global_flow/global_deadcode pass on large bytecode
+* Compiler: optimize sourcemap processing, improving linking performance
 
 ## Bug fixes
 * Runtime: fix parsing of unsigned integers (0u2147483648)
