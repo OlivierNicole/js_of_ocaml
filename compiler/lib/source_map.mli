@@ -118,7 +118,7 @@ val concat : file:string -> sourceroot:string option -> t -> t -> t
     codebases, as it decodes the whole source text. This may be fixed in the
     future. *)
 
-module Composite : sig
+module Index : sig
   type offset =
     { gen_line : int
     ; gen_column : int

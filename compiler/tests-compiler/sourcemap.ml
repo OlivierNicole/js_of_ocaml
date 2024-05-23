@@ -55,7 +55,8 @@ let%expect_test _ =
       print_file (Filetype.path_of_js_file js_file);
       match extract_sourcemap js_file with
       | None -> Printf.printf "No sourcemap found\n"
-      | Some sm -> print_mapping sm);
+      | Some (`Standard sm) -> print_mapping sm
+      | Some (`Index _) -> failwith "unexpected index map");
   [%expect
     {|
       $ cat "test.ml"

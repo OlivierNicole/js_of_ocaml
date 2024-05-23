@@ -97,6 +97,10 @@ let of_json json =
       | `Intlit version when Int.equal (int_of_string version) 3 -> ()
       | `Floatlit _ | `Intlit _ -> invalid_arg "Source_map_io.of_json: version != 3"
       | _ -> invalid_arg "Source_map_io.of_json: version field is not a number");
+      (match List.assoc "sections" rest with
+      | _ ->
+          invalid_arg "Source_map_io.of_json: this seems to be an index map. Reading index maps is currently not supported."
+      | exception Not_found -> ());
       let file = string "file" rest in
       let sourceroot = string "sourceRoot" rest in
       let names = list_string "names" rest in
@@ -124,7 +128,7 @@ let of_json json =
       }
   | _ -> invalid ()
 
-let of_string s = of_json (Yojson.Raw.from_string s)
+let of_string s = `Standard (of_json (Yojson.Raw.from_string s))
 
 let to_string m = Yojson.Raw.to_string (json m)
 
@@ -132,15 +136,15 @@ let to_file m file = Yojson.Raw.to_file file (json m)
 
 let enabled = true
 
-module Composite = struct
+module Index = struct
   let json t =
     `Assoc
-      [ "version", `Intlit (Int.to_string t.Composite.version)
+      [ "version", `Intlit (Int.to_string t.Index.version)
       ; "file", stringlit_of_string (rewrite_path t.file)
       ; ( "sections"
         , `List
             (List.map
-               (fun ({ Composite.gen_line; gen_column }, `Map sm) ->
+               (fun ({ Index.gen_line; gen_column }, `Map sm) ->
                  `Assoc
                    [ ( "offset"
                      , `Assoc

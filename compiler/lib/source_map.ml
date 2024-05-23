@@ -675,7 +675,7 @@ let concat ~file ~sourceroot s1 s2 =
         s2.mappings
   }
 
-module Composite = struct
+module Index = struct
   type offset =
     { gen_line : int
     ; gen_column : int
