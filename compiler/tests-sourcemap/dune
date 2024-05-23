@@ -1,6 +1,9 @@
 (env
  (_
   (js_of_ocaml
+   (flags (--source-map))
+   (link_flags
+    (--source-map --resolve-sourcemap-url true))
    (compilation_mode separate))))
 
 (executable
