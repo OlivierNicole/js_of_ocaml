@@ -107,7 +107,7 @@ let of_json json =
         Option.map
           (fun mappings ->
             assert (
-              String.length mappings > 2
+              String.length mappings >= 2
               && Char.equal mappings.[0] '"'
               && Char.equal mappings.[String.length mappings - 1] '"');
             let mappings = String.sub mappings 1 (String.length mappings - 2) in
