@@ -106,7 +106,7 @@ let options =
             ; file
             ; sourceroot = sourcemap_root
             ; sources = []
-            ; sources_contents = Some (Source_map.Sources_contents.encode [])
+            ; sources_contents = Some []
             ; names = []
             ; mappings = Source_map.Mappings.empty
             } )

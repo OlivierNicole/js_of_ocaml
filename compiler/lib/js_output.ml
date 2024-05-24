@@ -1926,7 +1926,7 @@ let program ?(accept_unnamed_var = false) f ?source_map p =
                 loop xs ys
           in
           let sources_contents =
-            Option.map ~f:Source_map.Sources_contents.decode sm.sources_contents
+            Option.map ~f:(List.map ~f:Source_map.Source_text.decode) sm.sources_contents
           in
           loop sm.sources (Option.value ~default:[] sources_contents);
           List.iter sm.Source_map.names ~f:(fun f ->
@@ -1985,7 +1985,7 @@ let program ?(accept_unnamed_var = false) f ?source_map p =
         let sources_contents =
           let open Option.Syntax in
           let* r = contents in
-          Option.return (Source_map.Sources_contents.encode (List.rev !r))
+          Option.return (List.map ~f:Source_map.Source_text.encode (List.rev !r))
         in
         let sources =
           List.map sources ~f:(fun filename ->

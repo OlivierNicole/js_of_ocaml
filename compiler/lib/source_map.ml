@@ -58,27 +58,14 @@ module Line_edits = struct
   let pp fmt = Format.(pp_print_list pp_action fmt)
 end
 
-module Mappings : sig
-  type t = private Uninterpreted of string [@@unboxed]
-
-  external uninterpreted : string -> t = "%identity"
-
-  val empty : t
-
-  val decode : t -> map list
-
-  val encode : map list -> t
-
-  val edit : strict:bool -> t -> Line_edits.t -> t
-
-  (* Not for export *)
-  val concat : source_count1:int -> name_count1:int -> t -> t -> t
-end = struct
+module Mappings = struct
   type t = Uninterpreted of string [@@unboxed]
 
   let empty = Uninterpreted ""
 
-  external uninterpreted : string -> t = "%identity"
+  external of_string : string -> t = "%identity"
+
+  external to_string : t -> string = "%identity"
 
   let update_carries_from_segment
       ~carry_source
@@ -573,63 +560,35 @@ end = struct
     readline 1 0 []
 end
 
-module Sources_contents : sig
-  type t = private Uninterpreted of string [@@unboxed]
-
-  external uninterpreted : string -> t = "%identity"
-
-  val decode : t -> string option list
-
-  val encode : string option list -> t
-end = struct
+module Source_text = struct
   type t = Uninterpreted of string [@@unboxed]
 
-  external uninterpreted : string -> t = "%identity"
+  external of_json_string : string -> t = "%identity"
 
-  let to_json (cs : string option list) =
-    `List
-      (List.map
-         ~f:(function
-           | None -> `Null
-           | Some s -> `String s)
-         cs)
+  external to_json_string : t -> string = "%identity"
+  
+  let to_json =
+    function
+    | None -> `Null
+    | Some text -> `String text
 
-  let encode cs =
-    (* There are two stages to the encoding. First encoding the list as a JSON
-       array of strings... *)
-    let array = Yojson.Basic.to_string (to_json cs) in
-    (* ... and then reifying that array itself as a string, under the form of a
-       JSON string literal. *)
-    let reified = Yojson.Basic.to_string (`String array) in
-    Uninterpreted reified
+  let encode t =
+    let json = Yojson.Basic.to_string (to_json t) in
+    Uninterpreted json
 
-  let of_json json =
-    match json with
-    | `List l ->
-        List.map
-          ~f:(function
-            | `String s -> Some s
-            | `Null -> None
-            | _ -> invalid_arg "Source_map.Sources_contents.of_json")
-          l
-    | _ -> invalid_arg "Source_map.Sources_contents.of_json"
+  let of_json =
+    function
+    | `String s -> Some s
+    | `Null -> None
+    | _ -> invalid_arg "Source_map.Sources_contents.of_json: expected string or null"
 
-  let decode (Uninterpreted s) : string option list =
+  let decode (Uninterpreted s) : string option =
     (* The two stages of the encoding, in reverse. *)
-    match Yojson.Basic.from_string s with
-    | `String array -> (
-        try of_json (Yojson.Basic.from_string array)
-        with Yojson.Json_error s ->
-          invalid_arg
-            ("Source_map.Sources_contents.decode: This is a valid JSON literal, but it \
-              does not encode a JSON array: "
-            ^ s))
-    | _ ->
-        invalid_arg
-          "Source_map.Sources_contents.decode: This is a valid JSON object but not a \
-           string literal"
-    | exception Yojson.Json_error s ->
-        invalid_arg ("Source_map.Sources_contents.decode: not a JSON string literal: " ^ s)
+    try of_json (Yojson.Basic.from_string s) with
+    | Yojson.Json_error s ->
+      invalid_arg
+        ("Source_map.Sources_contents.decode: This is not a valid JSON object: "
+        ^ s)
 end
 
 type t =
@@ -637,7 +596,7 @@ type t =
   ; file : string
   ; sourceroot : string option
   ; sources : string list
-  ; sources_contents : Sources_contents.t option
+  ; sources_contents : Source_text.t list option
   ; names : string list
   ; mappings : Mappings.t
   }
@@ -662,10 +621,7 @@ let concat ~file ~sourceroot s1 s2 =
   ; sources_contents =
       (match s1.sources_contents, s2.sources_contents with
       | None, contents | contents, None -> contents
-      | Some c1, Some c2 ->
-          let c1 = Sources_contents.decode c1 in
-          let c2 = Sources_contents.decode c2 in
-          Some (Sources_contents.encode (c1 @ c2)))
+      | Some c1, Some c2 -> Some (c1 @ c2))
   ; names = s1.names @ s2.names
   ; mappings =
       Mappings.concat

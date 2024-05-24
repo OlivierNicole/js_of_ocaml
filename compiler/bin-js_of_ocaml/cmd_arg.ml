@@ -321,7 +321,7 @@ let options =
             ; sources_contents =
                 (if sourcemap_don't_inline_content
                  then None
-                 else Some (Source_map.Sources_contents.encode []))
+                 else Some [])
             ; names = []
             ; mappings = Source_map.Mappings.empty
             } )
@@ -563,7 +563,7 @@ let options_runtime_only =
             ; sources_contents =
                 (if sourcemap_don't_inline_content
                  then None
-                 else Some (Source_map.Sources_contents.encode []))
+                 else Some [])
             ; names = []
             ; mappings = Source_map.Mappings.empty
             } )

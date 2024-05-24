@@ -470,10 +470,7 @@ let link ~output ~linkall ~mklib ~toplevel ~files ~resolve_sourcemap_url ~source
       in
       let merged_sourcemap =
         let open Source_map in
-        assert (
-          match init_sm.mappings with
-          | Uninterpreted "" -> true
-          | _ -> false);
+        assert (String.equal (Mappings.to_string init_sm.mappings) "");
         { version = init_sm.version
         ; file = init_sm.file
         ; Index.sections =

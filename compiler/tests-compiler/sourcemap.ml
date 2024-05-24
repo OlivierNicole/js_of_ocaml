@@ -112,8 +112,8 @@ function x (a, b) {
 
 let%expect_test _ =
   let map_str = ";;;;EAEE,EAAE,EAAC,CAAE;ECQY,UACC" in
-  let map = Source_map.Mappings.(decode (uninterpreted map_str)) in
-  let (Uninterpreted map_str') = Source_map.Mappings.encode map in
+  let map = Source_map.Mappings.(decode (of_string map_str)) in
+  let map_str' = Source_map.Mappings.(to_string (encode map)) in
   print_endline map_str;
   print_endline map_str';
   [%expect
@@ -148,8 +148,8 @@ let%expect_test _ =
     { s2 with mappings = Source_map.Mappings.edit ~strict:true s2.mappings edits }
   in
   let m = Source_map.concat ~file:"" ~sourceroot:None s1 s2 in
-  let (Uninterpreted encoded_mappings) = m.Source_map.mappings in
-  print_endline encoded_mappings;
+  let encoded_mappings = m.Source_map.mappings in
+  print_endline (Source_map.Mappings.to_string encoded_mappings);
   print_mapping m;
   [%expect
     {|

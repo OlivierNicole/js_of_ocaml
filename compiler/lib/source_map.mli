@@ -52,22 +52,22 @@ module Line_edits : sig
 end
 
 module Mappings : sig
-  (** Left uninterpreted, since many operations can be performed efficiently directly
-      on the encoded form. Instances of [t] produced by {!val:encode} are
-      guaranteed to be valid JSON string literals (surrounding double quotes
-      included). *)
-  type t = private Uninterpreted of string [@@unboxed]
+  type t
 
   val empty : t
   (** Represents the empty mapping. *)
 
-  external uninterpreted : string -> t = "%identity"
-  (** Create a value of type {!type:t} from a string, without attempting to
-      decode it. *)
+  val of_string : string -> t
+  (** By default, mappings are left uninterpreted, since many operations can be
+      performed efficiently directly on the encoded form. It is guaranteed that
+      {!val:of_string} and {!val:to_string} are inverse functions. *)
 
   val decode : t -> map list
 
   val encode : map list -> t
+
+  val to_string : t -> string
+  (** Returns the mappings as a string in the Source map v3 format. *)
 
   val edit : strict:bool -> t -> Line_edits.t -> t
   (** Apply line edits in order. If the number of {!const:Line_edits.Keep} and
@@ -76,20 +76,21 @@ module Mappings : sig
       included in the result. *)
 end
 
-module Sources_contents : sig
-  (** Left uninterpreted by default as decoding this field can be costly if the
-      amount of code is large, and is seldom required. Instances of [t]
-      produced by {!val:encode} are guaranteed to be valid JSON string
-      literals (surrounding double quotes included). *)
-  type t = private Uninterpreted of string [@@unboxed]
+module Source_text : sig
+  type t
 
-  external uninterpreted : string -> t = "%identity"
-  (** Create a value of type {!type:t} from a string, without attempting to
-      decode it. *)
+  val of_json_string : string -> t
+  (** By default, sources contents are left uninterpreted as decoding this field can be
+      costly if the amount of code is large, and is seldom required. It is guaranteed that
+      {!val:of_json_string} and {!val:to_json_string} are inverse functions.  *)
 
-  val decode : t -> string option list
+  val decode : t -> string option
 
-  val encode : string option list -> t
+  val encode : string option -> t
+
+  val to_json_string : t -> string
+  (** Returns a valid JSON object (in this instance, a string literal, double quotes
+      included) representing the source text. *)
 end
 
 type t =
@@ -97,7 +98,7 @@ type t =
   ; file : string
   ; sourceroot : string option
   ; sources : string list
-  ; sources_contents : Sources_contents.t option
+  ; sources_contents : Source_text.t list option
         (** Left uninterpreted by default, since decoding it requires to handle special
           characters, which can be costly for huge codebases. *)
   ; names : string list
@@ -113,10 +114,7 @@ val concat : file:string -> sourceroot:string option -> t -> t -> t
 (** If [s1] encodes a mapping for a generated file [f1], and [s2] for a
     generated file [f2], then [concat ~file ~sourceroot s1 s2] encodes the
     union of these mappings for the concatenation of [f1] and [f2], with name
-    [file] and source root [sourceroot). Note that at the moment, this function
-    can be slow when the [sources_contents] field contains very large
-    codebases, as it decodes the whole source text. This may be fixed in the
-    future. *)
+    [file] and source root [sourceroot). *)
 
 module Index : sig
   type offset =

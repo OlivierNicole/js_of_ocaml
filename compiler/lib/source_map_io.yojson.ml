@@ -31,7 +31,9 @@ let rewrite_path path =
 let stringlit_of_string s = `Stringlit (Yojson.Basic.to_string (`String s))
 
 let json t =
-  let (Source_map.Mappings.Uninterpreted mappings) = t.mappings in
+  let mappings =
+    `Stringlit ("\"" ^ Mappings.to_string t.mappings ^ "\"") (* Nothing to escape *)
+  in
   let fields =
     [ "version", `Intlit (Int.to_string t.version)
     ; "file", stringlit_of_string (rewrite_path t.file)
@@ -43,18 +45,17 @@ let json t =
     ; "names", `List (List.map (fun s -> stringlit_of_string s) t.names)
     ; ( "sources"
       , `List (List.map (fun s -> stringlit_of_string (rewrite_path s)) t.sources) )
-    ; "mappings", `Stringlit ("\"" ^ mappings ^ "\"") (* Nothing to escape *)
+    ; "mappings", mappings
     ]
   in
   match t.sources_contents with
   | None -> `Assoc fields
-  | Some (Source_map.Sources_contents.Uninterpreted cs) ->
+  | Some cs ->
       `Assoc
         (fields
         @ [ ( "sourcesContent"
-              (* It is the job of {!mod:Sources_contents} to enforce that [cs] is
-                 already a valid JSON string literal *)
-            , `Stringlit cs )
+            , `List (List.map (fun t -> `Stringlit (Source_text.to_json_string t))
+            cs) )
           ])
 
 let invalid () = invalid_arg "Source_map.of_json"
@@ -89,6 +90,17 @@ let stringlit_opt name assoc =
   | `Stringlit s -> Some s
   | _ | (exception Not_found) -> None
 
+let stringlit_list_opt name assoc =
+  match List.assoc name assoc with
+  | `List l ->
+      Some (List.map
+              (function
+                | `Stringlit lit -> lit
+                | _ -> invalid ())
+              l)
+  | _ -> invalid ()
+  | exception Not_found -> None
+
 let of_json json =
   match json with
   | `Assoc (("version", version) :: rest) ->
@@ -105,7 +117,7 @@ let of_json json =
       let sourceroot = string "sourceRoot" rest in
       let names = list_string "names" rest in
       let sources = list_string "sources" rest in
-      let sources_contents = stringlit_opt "sourcesContent" rest in
+      let sources_contents = stringlit_list_opt "sourcesContent" rest in
       let mappings = stringlit_opt "mappings" rest in
       let mappings =
         Option.map
@@ -114,15 +126,14 @@ let of_json json =
               String.length mappings >= 2
               && Char.equal mappings.[0] '"'
               && Char.equal mappings.[String.length mappings - 1] '"');
-            let mappings = String.sub mappings 1 (String.length mappings - 2) in
-            Mappings.uninterpreted mappings)
+            Mappings.of_string (String.sub mappings 1 (String.length mappings - 2)))
           mappings
       in
       { version = 3
       ; file = Option.value file ~default:""
       ; sourceroot
       ; names = Option.value names ~default:[]
-      ; sources_contents = Option.map Sources_contents.uninterpreted sources_contents
+      ; sources_contents = Option.map (List.map Source_text.of_json_string) sources_contents
       ; sources = Option.value sources ~default:[]
       ; mappings = Option.value mappings ~default:Mappings.empty
       }
