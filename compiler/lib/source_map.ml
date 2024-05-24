@@ -1,3 +1,4 @@
+
 (* Js_of_ocaml compiler
  * http://www.ocsigen.org/js_of_ocaml/
  * Copyright (C) 2013 Hugo Heuzard
@@ -566,6 +567,8 @@ module Source_text = struct
   external of_json_string : string -> t = "%identity"
 
   external to_json_string : t -> string = "%identity"
+
+  let empty = Uninterpreted ""
   
   let to_json =
     function

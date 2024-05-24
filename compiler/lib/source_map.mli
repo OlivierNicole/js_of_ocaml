@@ -79,6 +79,8 @@ end
 module Source_text : sig
   type t
 
+  val empty : t
+
   val of_json_string : string -> t
   (** By default, sources contents are left uninterpreted as decoding this field can be
       costly if the amount of code is large, and is seldom required. It is guaranteed that

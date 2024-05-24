@@ -1903,7 +1903,7 @@ let program ?(accept_unnamed_var = false) f ?source_map p =
   let temp_mappings = ref [] in
   let files = Hashtbl.create 17 in
   let names = Hashtbl.create 17 in
-  let contents : string option list ref option =
+  let contents : Source_map.Source_text.t list ref option =
     match source_map with
     | None | Some { Source_map.sources_contents = None; _ } -> None
     | Some { Source_map.sources_contents = Some _; _ } -> Some (ref [])
@@ -1918,30 +1918,28 @@ let program ?(accept_unnamed_var = false) f ?source_map p =
             | [], _ -> ()
             | x :: xs, [] ->
                 Hashtbl.add files x (Hashtbl.length files);
-                Option.iter contents ~f:(fun r -> r := None :: !r);
+                Option.iter contents ~f:(fun r -> r := Source_map.Source_text.empty :: !r);
                 loop xs []
             | x :: xs, y :: ys ->
                 Hashtbl.add files x (Hashtbl.length files);
                 Option.iter contents ~f:(fun r -> r := y :: !r);
                 loop xs ys
           in
-          let sources_contents =
-            Option.map ~f:(List.map ~f:Source_map.Source_text.decode) sm.sources_contents
-          in
-          loop sm.sources (Option.value ~default:[] sources_contents);
+          loop sm.sources (Option.value ~default:[] sm.sources_contents);
           List.iter sm.Source_map.names ~f:(fun f ->
               Hashtbl.add names f (Hashtbl.length names));
           true
     in
     let find_source file =
-      match Builtins.find file with
-      | Some f -> Some (Builtins.File.content f)
-      | None ->
-          if Sys.file_exists file && not (Sys.is_directory file)
-          then
-            let content = Fs.read_file file in
-            Some content
-          else None
+      Source_map.Source_text.encode (
+        match Builtins.find file with
+        | Some f -> Some (Builtins.File.content f)
+        | None ->
+            if Sys.file_exists file && not (Sys.is_directory file)
+            then
+              let content = Fs.read_file file in
+              Some content
+            else None)
     in
     ( (fun pos m -> temp_mappings := (pos, m) :: !temp_mappings)
     , (fun file ->
@@ -1985,7 +1983,7 @@ let program ?(accept_unnamed_var = false) f ?source_map p =
         let sources_contents =
           let open Option.Syntax in
           let* r = contents in
-          Option.return (List.map ~f:Source_map.Source_text.encode (List.rev !r))
+          Option.return (List.rev !r)
         in
         let sources =
           List.map sources ~f:(fun filename ->
