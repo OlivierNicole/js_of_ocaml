@@ -167,6 +167,26 @@ module Index = struct
                t.sections) )
       ]
 
+let of_json json =
+  let file = string "file" json in
+  match List.assoc "sections" json with
+  | `List sections ->
+      let sections =
+        List.map
+          (fun section ->
+            
+          )
+          sections
+      in
+      Index.{
+        version = 3
+      ; file = Option.value file ~default:""
+      ; sections
+      }
+  | _ -> invalid_arg "Source_map_io.Index.of_json: `sections` is not an array"
+  | exception Not_found ->
+      invalid_arg "Source_map_io.Index.of_json: no `sections` field"
+
   let to_string m = Yojson.Raw.to_string (json m)
 
   let to_file m file = Yojson.Raw.to_file file (json m)
