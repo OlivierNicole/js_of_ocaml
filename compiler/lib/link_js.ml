@@ -336,8 +336,10 @@ let link ~output ~linkall ~mklib ~toplevel ~files ~resolve_sourcemap_url ~source
         let line = Line_reader.next ic in
         let count = Line_writer.write ~source:ic oc line in
         if count > 1
-        then edits := Source_map.Line_edits.Add { count = count - 1 } :: !edits;
-        edits := Source_map.Line_edits.Keep :: !edits
+        then
+          (* Line actions are in reverse order compared to the actual generated lines *)
+          edits := Source_map.Line_edits.Keep :: Add { count = count - 1 } :: !edits
+        else edits := Source_map.Line_edits.Keep :: !edits
       in
       let write_line oc str =
         let count = Line_writer.write oc str in
@@ -475,9 +477,9 @@ let link ~output ~linkall ~mklib ~toplevel ~files ~resolve_sourcemap_url ~source
         ; file = init_sm.file
         ; Index.sections =
             (let _, sections =
-               List.fold_right
+               List.fold_left
                  sourcemaps_and_line_counts
-                 ~f:(fun (sm, generated_line_count) (cur_ofs, sections) ->
+                 ~f:(fun (cur_ofs, sections) (sm, generated_line_count) ->
                    let offset = Index.{ gen_line = cur_ofs; gen_column = 0 } in
                    cur_ofs + generated_line_count, (offset, `Map sm) :: sections)
                  ~init:(0, [])

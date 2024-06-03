@@ -101,7 +101,7 @@ let stringlit_list_opt name assoc =
   | _ -> invalid ()
   | exception Not_found -> None
 
-let of_json json =
+let standard_map_of_json json =
   match json with
   | `Assoc (("version", version) :: rest) ->
       (match version with
@@ -110,8 +110,7 @@ let of_json json =
       | `Floatlit _ | `Intlit _ -> invalid_arg "Source_map_io.of_json: version != 3"
       | _ -> invalid_arg "Source_map_io.of_json: version field is not a number");
       (match List.assoc "sections" rest with
-      | _ ->
-          invalid_arg "Source_map_io.of_json: this seems to be an index map. Reading index maps is currently not supported."
+      | _ -> invalid_arg "Source_map_io.standard_map_of_json: not a standard map"
       | exception Not_found -> ());
       let file = string "file" rest in
       let sourceroot = string "sourceRoot" rest in
@@ -139,8 +138,6 @@ let of_json json =
       }
   | _ -> invalid ()
 
-let of_string s = `Standard (of_json (Yojson.Raw.from_string s))
-
 let to_string m = Yojson.Raw.to_string (json m)
 
 let to_file m file = Yojson.Raw.to_file file (json m)
@@ -167,27 +164,63 @@ module Index = struct
                t.sections) )
       ]
 
-let of_json json =
-  let file = string "file" json in
-  match List.assoc "sections" json with
-  | `List sections ->
-      let sections =
-        List.map
-          (fun section ->
-            
-          )
-          sections
-      in
-      Index.{
-        version = 3
-      ; file = Option.value file ~default:""
-      ; sections
-      }
-  | _ -> invalid_arg "Source_map_io.Index.of_json: `sections` is not an array"
-  | exception Not_found ->
-      invalid_arg "Source_map_io.Index.of_json: no `sections` field"
+  let intlit ~errmsg name json =
+    match List.assoc name json with
+    | `Intlit i -> int_of_string i
+    | _ -> invalid_arg errmsg
+    | exception Not_found -> invalid_arg errmsg
+
+  let section_of_json : Yojson.Raw.t -> Index.offset * [`Map of t] = function
+    | `Assoc json -> (
+        let offset =
+          match List.assoc "offset" json with
+          | `Assoc fields ->
+              let gen_line = intlit "line" fields ~errmsg:"Source_map_io.Index.of_json: field 'line' absent or invalid from section" in
+              let gen_column = intlit "column" fields ~errmsg:"Source_map_io.Index.of_json: field 'column' absent or invalid from section" in
+              Index.{ gen_line; gen_column }
+          | _ -> invalid_arg "Source_map_io.Index.of_json: 'offset' field of unexpected type"
+        in
+        (match List.assoc "url" json with
+        | _ -> invalid_arg "Source_map_io.Index.of_json: URLs in index maps are not currently supported"
+        | exception Not_found -> ());
+        let map =
+          try standard_map_of_json (List.assoc "map" json) with
+          | Not_found -> invalid_arg "Source_map_io.Index.of_json: field 'map' absent"
+          | Invalid_argument _ -> invalid_arg "Source_map_io.Index.of_json: invalid sub-map object"
+        in
+        offset, `Map map)
+    | _ -> invalid_arg "Source_map_io.Index.of_json: section of unexpected type"
+
+  let of_json = function
+    | `Assoc fields -> (
+        let file = string "file" fields in
+        match List.assoc "sections" fields with
+        | `List sections ->
+            let sections =
+              List.map
+                section_of_json
+                sections
+            in
+            {
+              Index.version = 3
+            ; file = Option.value file ~default:""
+            ; sections
+            }
+        | _ -> invalid_arg "Source_map_io.Index.of_json: `sections` is not an array"
+        | exception Not_found ->
+            invalid_arg "Source_map_io.Index.of_json: no `sections` field")
+    | _ -> invalid_arg "Source_map_io.of_json: map is not an object"
 
   let to_string m = Yojson.Raw.to_string (json m)
 
   let to_file m file = Yojson.Raw.to_file file (json m)
 end
+
+let of_json = function
+  | `Assoc fields as json ->
+      (match List.assoc "sections" fields with
+      | _ -> `Index (Index.of_json json)
+      | exception Not_found -> `Standard (standard_map_of_json json))
+  | _ -> invalid_arg "Source_map_io.of_json: map is not an object"
+
+let of_string s = of_json (Yojson.Raw.from_string s)
