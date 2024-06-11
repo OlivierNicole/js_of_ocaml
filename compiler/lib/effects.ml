@@ -723,7 +723,37 @@ let cps_instr ~st (instr : instr) : instr list =
       (* Nothing to do for single-version functions. *)
       [ instr ]
   | Let (_, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) ->
+      (* Applications of CPS functions and effect primitives require more work
+         (allocating a continuation and/or modifying end-of-block branches) and
+         are handled in a specialized function below. *)
       assert false
+  | Let (x, Prim (Extern "caml_assume_no_effects", [ Pv f ])) ->
+      if double_translate ()
+      then
+        (* We just need to call [f] in direct style. *)
+        let unit = Var.fresh_n "unit" in
+        let exact = Global_flow.exact_call st.flow_info f 1 in
+        [ Let (unit, Constant (Int 0l)); Let (x, Apply { exact; f; args = [ unit ] }) ]
+      else (
+        (* The "needs CPS" case should have been taken care of by another, specialized
+           function below. *)
+        assert (not (Var.Set.mem x st.cps_needed));
+        (* Translated like the [Apply] case, with a unit argument *)
+        assert (
+          (* If this function is unknown to the global flow analysis, then it was
+             introduced by the lambda lifting and does not require CPS *)
+          Var.idx f >= Var.Tbl.length st.flow_info.info_approximation
+          || Global_flow.exact_call st.flow_info f 1);
+        let unit = Var.fresh_n "unit" in
+        [ Let (unit, Constant (Int 0l))
+        ; Let (x, Apply { f; args = [ unit ]; exact = true })
+        ])
+  | Let (_, Prim (Extern "caml_assume_no_effects", args)) ->
+      invalid_arg
+      @@ Format.sprintf
+           "Internal primitive `caml_assume_no_effects` takes exactly 1 argument (%d \
+            given)"
+           (List.length args)
   | _ -> [ instr ]
 
 let cps_block ~st ~k ~lifter_functions ~orig_pc block =
@@ -757,6 +787,26 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
               || Global_flow.exact_call st.flow_info f (List.length args)
             in
             tail_call ~st ~exact ~check:true ~f (args @ [ k ]) loc)
+    | Prim (Extern "caml_assume_no_effects", [ Pv f ])
+      when (not (double_translate ())) && Var.Set.mem x st.cps_needed ->
+        (* Translated like the [Apply] case, with a unit argument *)
+        Some
+          (fun ~k ->
+            let exact =
+              (* If this function is unknown to the global flow analysis, then it was
+                 introduced by the lambda lifting and is exact *)
+              Var.idx f >= Var.Tbl.length st.flow_info.info_approximation
+              || Global_flow.exact_call st.flow_info f 1
+            in
+            let unit = Var.fresh_n "unit" in
+            tail_call
+              ~st
+              ~instrs:[ Let (unit, Constant (Int 0l)), noloc ]
+              ~exact
+              ~check:true
+              ~f
+              [ unit; k ]
+              loc)
     | Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ]) ->
         Some
           (fun ~k ->
@@ -923,6 +973,18 @@ let rewrite_direct_block
               , Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ])
               )
           ]
+      | Let (x, Prim (Extern "caml_assume_no_effects", [ Pv f ])) ->
+          (* We just need to call [f] in direct style. *)
+          let unit = Var.fresh_n "unit" in
+          let unit_val = Int 0l in
+          let exact = Global_flow.exact_call st.flow_info f 1 in
+          [ Let (unit, Constant unit_val); Let (x, Apply { exact; f; args = [ unit ] }) ]
+      | Let (_, Prim (Extern "caml_assume_no_effects", args)) ->
+          invalid_arg
+          @@ Format.sprintf
+               "Internal primitive `caml_assume_no_effects` takes exactly 1 argument (%d \
+                given)"
+               (List.length args)
       | (Let _ | Assign _ | Set_field _ | Offset_ref _ | Array_set _) as instr ->
           [ instr ]
     in
