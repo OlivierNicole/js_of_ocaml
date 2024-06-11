@@ -146,6 +146,16 @@ let dominance_frontier g idom =
 
 (****)
 
+let effect_primitive_or_application = function
+  | Prim (Extern ("%resume" | "%perform" | "%reperform" | "caml_assume_no_perform"), _)
+  | Apply _ -> true
+  | Block (_, _, _, _)
+  | Field (_, _, _)
+  | Closure (_, _)
+  | Constant _
+  | Prim (_, _)
+  | Special _ -> false
+
 (*
 We establish the list of blocks that needs to be CPS-transformed. We
 also mark blocks that correspond to function continuations or
@@ -182,11 +192,8 @@ let compute_needed_transformations ~cfg ~idom ~cps_needed ~blocks ~start =
       (match fst block.branch with
       | Branch (dst, _) -> (
           match List.last block.body with
-          | Some
-              ( Let
-                  (x, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _)))
-              , _ )
-            when Var.Set.mem x cps_needed ->
+          | Some (Let (x, e), _)
+            when effect_primitive_or_application e && Var.Set.mem x cps_needed ->
               (* The block after a function application that needs to
                  be turned to CPS or an effect primitive needs to be
                  transformed. *)
@@ -735,7 +742,39 @@ let cps_instr ~st (instr : instr) : instr list =
       (* Nothing to do for single-version functions. *)
       [ instr ]
   | Let (_, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) ->
+      (* Applications of CPS functions and effect primitives require more work
+         (allocating a continuation and/or modifying end-of-block branches) and
+         are handled in a specialized function below. *)
       assert false
+  | Let (x, Prim (Extern "caml_assume_no_perform", [ Pv f ])) ->
+      if double_translate ()
+      then
+        (* We just need to call [f] in direct style. *)
+        let unit = Var.fresh_n "unit" in
+        let exact = Global_flow.exact_call st.flow_info f 1 in
+        [ Let (unit, Constant (Int Targetint.zero))
+        ; Let (x, Apply { exact; f; args = [ unit ] })
+        ]
+      else (
+        (* The "needs CPS" case should have been taken care of by another, specialized
+           function below. *)
+        assert (not (Var.Set.mem x st.cps_needed));
+        (* Translated like the [Apply] case, with a unit argument *)
+        assert (
+          (* If this function is unknown to the global flow analysis, then it was
+             introduced by the lambda lifting and does not require CPS *)
+          Var.idx f >= Var.Tbl.length st.flow_info.info_approximation
+          || Global_flow.exact_call st.flow_info f 1);
+        let unit = Var.fresh_n "unit" in
+        [ Let (unit, Constant (Int Targetint.zero))
+        ; Let (x, Apply { f; args = [ unit ]; exact = true })
+        ])
+  | Let (_, Prim (Extern "caml_assume_no_perform", args)) ->
+      invalid_arg
+      @@ Format.sprintf
+           "Internal primitive `caml_assume_no_perform` takes exactly 1 argument (%d \
+            given)"
+           (List.length args)
   | _ -> [ instr ]
 
 let cps_block ~st ~k ~lifter_functions ~orig_pc block =
@@ -769,6 +808,27 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
               || Global_flow.exact_call st.flow_info f (List.length args)
             in
             tail_call ~st ~exact ~in_cps:true ~check:true ~f (args @ [ k ]) loc)
+    | Prim (Extern "caml_assume_no_perform", [ Pv f ])
+      when (not (double_translate ())) && Var.Set.mem x st.cps_needed ->
+        (* Translated like the [Apply] case, with a unit argument *)
+        Some
+          (fun ~k ->
+            let exact =
+              (* If this function is unknown to the global flow analysis, then it was
+                 introduced by the lambda lifting and is exact *)
+              Var.idx f >= Var.Tbl.length st.flow_info.info_approximation
+              || Global_flow.exact_call st.flow_info f 1
+            in
+            let unit = Var.fresh_n "unit" in
+            tail_call
+              ~st
+              ~instrs:[ Let (unit, Constant (Int Targetint.zero)), noloc ]
+              ~exact
+              ~in_cps:false
+              ~check:true
+              ~f
+              [ unit; k ]
+              loc)
     | Prim (Extern "%resume", [ Pv stack; Pv f; Pv arg ]) ->
         Some
           (fun ~k ->
@@ -881,8 +941,7 @@ let rewrite_direct_instr ~st (instr, loc) =
          the right number of parameter *)
       assert (Global_flow.exact_call st.flow_info f (List.length args));
       Let (x, Apply { f; args; exact = true }), loc
-  | Let (_, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) ->
-      assert false
+  | Let (_, e) when effect_primitive_or_application e -> assert false
   | _ -> instr, loc
 
 (* If double-translating, modify all function applications and closure
@@ -940,6 +999,18 @@ let rewrite_direct_block
               , Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ])
               )
           ]
+      | Let (x, Prim (Extern "caml_assume_no_perform", [ Pv f ])) ->
+          (* We just need to call [f] in direct style. *)
+          let unit = Var.fresh_n "unit" in
+          let unit_val = Int Targetint.zero in
+          let exact = Global_flow.exact_call st.flow_info f 1 in
+          [ Let (unit, Constant unit_val); Let (x, Apply { exact; f; args = [ unit ] }) ]
+      | Let (_, Prim (Extern "caml_assume_no_perform", args)) ->
+          invalid_arg
+          @@ Format.sprintf
+               "Internal primitive `caml_assume_no_perform` takes exactly 1 argument (%d \
+                given)"
+               (List.length args)
       | (Let _ | Assign _ | Set_field _ | Offset_ref _ | Array_set _) as instr ->
           [ instr ]
     in
@@ -1384,7 +1455,7 @@ let split_blocks ~cps_needed ~lifter_functions (p : Code.program) =
   let split_block pc block p =
     let is_split_point i r branch =
       match i with
-      | Let (x, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) -> (
+      | Let (x, e) when effect_primitive_or_application e -> (
           ((not (List.is_empty r))
           ||
           match fst branch with
