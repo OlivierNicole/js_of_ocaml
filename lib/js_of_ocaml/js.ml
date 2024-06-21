@@ -839,6 +839,10 @@ let export_all obj =
   keys##forEach
     (wrap_callback (fun (key : js_string t) _ _ -> export_js key (Unsafe.get obj key)))
 
+module Effect = struct
+  external assume_no_perform : (unit -> 'a) -> 'a = "caml_assume_no_perform"
+end
+
 (****)
 
 (* DEPRECATED *)

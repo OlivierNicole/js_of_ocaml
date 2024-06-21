@@ -17,6 +17,12 @@
   (link_flags
    (:standard \ -g))))
 
+(executable
+  (name generators)
+  (modes js)
+  (flags (:standard -warn-error -A))
+  (libraries js_of_ocaml))
+
 (rule
  (targets version.ml.in)
  (action

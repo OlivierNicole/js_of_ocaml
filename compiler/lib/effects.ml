@@ -1423,7 +1423,7 @@ let split_blocks ~cps_needed ~lifter_functions (p : Code.program) =
   let split_block pc block p =
     let is_split_point i r branch =
       match i with
-      | Let (x, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform"), _))) -> (
+      | Let (x, (Apply _ | Prim (Extern ("%resume" | "%perform" | "%reperform" | "caml_assume_no_perform"), _))) -> (
           ((not (List.is_empty r))
           ||
           match fst branch with
