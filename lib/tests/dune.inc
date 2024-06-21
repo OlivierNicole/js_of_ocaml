@@ -1,3 +1,12 @@
+(library
+ ;; lib/tests/generators.ml
+ (name generators_75)
+ (enabled_if true)
+ (modules generators)
+ (libraries js_of_ocaml unix)
+ (inline_tests (modes js))
+ (preprocess
+  (pps ppx_js_internal ppx_expect)))
 
 (library
  ;; lib/tests/test_css_angle.ml

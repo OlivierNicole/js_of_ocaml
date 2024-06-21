@@ -727,7 +727,7 @@ let cps_instr ~st (instr : instr) : instr list =
          (allocating a continuation and/or modifying end-of-block branches) and
          are handled in a specialized function below. *)
       assert false
-  | Let (x, Prim (Extern "caml_assume_no_effects", [ Pv f ])) ->
+  | Let (x, Prim (Extern "caml_assume_no_perform", [ Pv f ])) ->
       if double_translate ()
       then
         (* We just need to call [f] in direct style. *)
@@ -748,10 +748,10 @@ let cps_instr ~st (instr : instr) : instr list =
         [ Let (unit, Constant (Int 0l))
         ; Let (x, Apply { f; args = [ unit ]; exact = true })
         ])
-  | Let (_, Prim (Extern "caml_assume_no_effects", args)) ->
+  | Let (_, Prim (Extern "caml_assume_no_perform", args)) ->
       invalid_arg
       @@ Format.sprintf
-           "Internal primitive `caml_assume_no_effects` takes exactly 1 argument (%d \
+           "Internal primitive `caml_assume_no_perform` takes exactly 1 argument (%d \
             given)"
            (List.length args)
   | _ -> [ instr ]
@@ -787,7 +787,7 @@ let cps_block ~st ~k ~lifter_functions ~orig_pc block =
               || Global_flow.exact_call st.flow_info f (List.length args)
             in
             tail_call ~st ~exact ~check:true ~f (args @ [ k ]) loc)
-    | Prim (Extern "caml_assume_no_effects", [ Pv f ])
+    | Prim (Extern "caml_assume_no_perform", [ Pv f ])
       when (not (double_translate ())) && Var.Set.mem x st.cps_needed ->
         (* Translated like the [Apply] case, with a unit argument *)
         Some
@@ -973,16 +973,16 @@ let rewrite_direct_block
               , Prim (Extern "caml_perform_effect", [ Pv effect; Pv continuation; Pc k ])
               )
           ]
-      | Let (x, Prim (Extern "caml_assume_no_effects", [ Pv f ])) ->
+      | Let (x, Prim (Extern "caml_assume_no_perform", [ Pv f ])) ->
           (* We just need to call [f] in direct style. *)
           let unit = Var.fresh_n "unit" in
           let unit_val = Int 0l in
           let exact = Global_flow.exact_call st.flow_info f 1 in
           [ Let (unit, Constant unit_val); Let (x, Apply { exact; f; args = [ unit ] }) ]
-      | Let (_, Prim (Extern "caml_assume_no_effects", args)) ->
+      | Let (_, Prim (Extern "caml_assume_no_perform", args)) ->
           invalid_arg
           @@ Format.sprintf
-               "Internal primitive `caml_assume_no_effects` takes exactly 1 argument (%d \
+               "Internal primitive `caml_assume_no_perform` takes exactly 1 argument (%d \
                 given)"
                (List.length args)
       | (Let _ | Assign _ | Set_field _ | Offset_ref _ | Array_set _) as instr ->
