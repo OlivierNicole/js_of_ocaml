@@ -360,7 +360,14 @@ module Mappings = struct
       ~str:mapping
       ~init:{ carry_source = 0; carry_line = 0; carry_col = 0; carry_name = 0 }
       (fun { carry_source; carry_line; carry_col; carry_name } str ~pos ~len ->
-        update_carries_from_line ~carry_source ~carry_line ~carry_col ~carry_name ~pos ~len str)
+        update_carries_from_line
+          ~carry_source
+          ~carry_line
+          ~carry_col
+          ~carry_name
+          ~pos
+          ~len
+          str)
 
   let concat ~source_count1 ~name_count1 (Uninterpreted m1) (Uninterpreted m2) =
     match m1, m2 with
