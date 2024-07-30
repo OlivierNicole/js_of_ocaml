@@ -147,4 +147,14 @@ module Index : sig
             composite sourcemaps with URLs for now, and it is therefore not
             implemented. *)
     }
+
+  val to_string : t -> string
+
+  val to_file : t -> string -> unit
 end
+
+val to_string : t -> string
+
+val to_file : t -> string -> unit
+
+val of_string : string -> [ `Standard of t | `Index of Index.t ]

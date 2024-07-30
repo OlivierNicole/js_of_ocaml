@@ -195,8 +195,7 @@ let action ~resolve_sourcemap_url ~drop_source_map file line =
   | (`Json_base64 _ | `Url _), true -> Drop
   | `Json_base64 offset, false ->
       Source_map
-        (rule_out_index_map
-           (Source_map_io.of_string (Base64.decode_exn ~off:offset line)))
+        (rule_out_index_map (Source_map.of_string (Base64.decode_exn ~off:offset line)))
   | `Url _, false when not resolve_sourcemap_url -> Drop
   | `Url offset, false ->
       let url = String.sub line ~pos:offset ~len:(String.length line - offset) in
@@ -205,7 +204,7 @@ let action ~resolve_sourcemap_url ~drop_source_map file line =
       let l = in_channel_length ic in
       let content = really_input_string ic l in
       close_in ic;
-      Source_map (rule_out_index_map (Source_map_io.of_string content))
+      Source_map (rule_out_index_map (Source_map.of_string content))
 
 module Units : sig
   val read : Line_reader.t -> drop_action:(unit -> unit) -> Unit_info.t -> Unit_info.t
@@ -517,11 +516,11 @@ let link ~output ~linkall ~mklib ~toplevel ~files ~resolve_sourcemap_url ~source
       in
       (match file with
       | None ->
-          let data = Source_map_io.Index.to_string merged_sourcemap in
+          let data = Source_map.Index.to_string merged_sourcemap in
           let s = sourceMappingURL_base64 ^ Base64.encode_exn data in
           Line_writer.write oc s ~add:(fun _ -> ()) |> ignore
       | Some file ->
-          Source_map_io.Index.to_file merged_sourcemap file;
+          Source_map.Index.to_file merged_sourcemap file;
           let s = sourceMappingURL ^ Filename.basename file in
           Line_writer.write oc s ~add:(fun _ -> ()) |> ignore);
       if times () then Format.eprintf "  sourcemap: %a@." Timer.print t
