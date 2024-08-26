@@ -342,7 +342,7 @@ let the_cond_of info x =
     info
     (fun x ->
       match Flow.Info.def info x with
-      | Some (Constant (Int 0l | Int32 0l | NativeInt 0n)) -> Zero
+      | Some (Constant (Int 0l)) -> Zero
       | Some
           (Constant
             ( Int _
