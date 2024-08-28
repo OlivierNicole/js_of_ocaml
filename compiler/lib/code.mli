@@ -210,6 +210,10 @@ type mutability =
   | Immutable
   | Maybe_mutable
 
+type field_type =
+  | Non_float
+  | Float
+
 type expr =
   | Apply of
       { f : Var.t
@@ -217,7 +221,7 @@ type expr =
       ; exact : bool (* if true, then # of arguments = # of parameters *)
       }
   | Block of int * Var.t array * array_or_not * mutability
-  | Field of Var.t * int
+  | Field of Var.t * int * field_type
   | Closure of Var.t list * cont
   | Constant of constant
   | Prim of prim * prim_arg list
@@ -226,7 +230,7 @@ type expr =
 type instr =
   | Let of Var.t * expr
   | Assign of Var.t * Var.t
-  | Set_field of Var.t * int * Var.t
+  | Set_field of Var.t * int * field_type * Var.t
   | Offset_ref of Var.t * int
   | Array_set of Var.t * Var.t * Var.t
 
