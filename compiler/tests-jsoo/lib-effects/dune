@@ -2,7 +2,7 @@
  (_
   (js_of_ocaml
    (flags
-    (:standard --enable effects)))))
+    (:standard --effects=cps)))))
 
 (library
  (name jsoo_testsuite_effect)

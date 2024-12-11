@@ -4,7 +4,7 @@
    (:standard -w -38))
   (js_of_ocaml
    (flags
-    (:standard --enable effects)))))
+    (:standard --effects=cps)))))
 
 (tests
  (build_if
