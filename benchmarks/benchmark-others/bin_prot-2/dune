@@ -1,0 +1,18 @@
+(library
+ (name bin_prot_bench)
+ (modules bench_numbers bench_lists bin_prot_bench)
+ (libraries bin_prot core core_unix ppx_bench.runtime-lib ppx_module_timer.runtime threads)
+ (preprocess
+  (pps ppx_jane)))
+
+(executable
+  (name bench)
+  (modules bench)
+  (modes js wasm)
+  (libraries bin_prot_bench core_bench.js)
+  (js_of_ocaml
+    (enabled_if true))
+  (wasm_of_ocaml
+    (flags --opt 2 --enable use-js-string))
+  (link_flags (:standard -linkall))
+)
