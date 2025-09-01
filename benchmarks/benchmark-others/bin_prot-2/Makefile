@@ -10,7 +10,7 @@ bench:
 	mkdir -p ../../../../janestreet/bench/bin_prot-2/
 	cp -f dune bench_lists.ml bench_numbers.ml bin_prot_bench.ml bench.ml \
     ../../../../janestreet/bench/bin_prot-2/
-	cd ../../../../janestreet/bench/bin_prot-2 && dune build --root ../.. --profile release --verbose bench/bin_prot-2/bench.bc.js #bench/bin_prot-2/bench.bc.wasm.js
+	cd ../../../../janestreet/bench/bin_prot-2 && dune build --root ../.. --profile release --verbose bench/bin_prot-2/bench.bc.js bench/bin_prot-2/bench.bc.wasm.js
 	cp -rf ../../../../janestreet/_build/default/bench/bin_prot-2/bench.bc* .
 	#$(MAKE) perform COMPILER=js_of_ocaml SCRIPT=bench.bc.js KIND=js
 	#$(MAKE) perform COMPILER=wasm_of_ocaml SCRIPT=bench.bc.wasm.js KIND=wasm
