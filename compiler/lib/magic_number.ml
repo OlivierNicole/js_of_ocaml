@@ -71,13 +71,11 @@ let () =
   else if Ocaml_version.compare current [ 5; 6 ] >= 0
   then failwith "OCaml version unsupported. Upgrade js_of_ocaml."
 
-let v = snd (of_string Ocaml_common.Config.exec_magic_number)
+let current_exe = "Caml1999X", snd (of_string Ocaml_common.Config.exec_magic_number)
 
-let current_exe = "Caml1999X", v
+let current_cmo = "Caml1999O", snd (of_string Ocaml_common.Config.cmo_magic_number)
 
-let current_cmo = "Caml1999O", v
-
-let current_cma = "Caml1999A", v
+let current_cma = "Caml1999A", snd (of_string Ocaml_common.Config.cma_magic_number)
 
 let current = function
   | `Exe -> current_exe
